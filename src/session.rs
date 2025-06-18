@@ -533,7 +533,7 @@ impl MtrSession {
                 // Simulate realistic network behavior
                 let base_latency = hop.hop as u64 * 10 + 20; // Base latency increases with hops
                 let jitter = rand::random::<u64>() % 50; // Random jitter
-                let packet_loss_chance = (hop.hop as f64 * 0.01).min(0.1); // Small loss chance
+                let packet_loss_chance = (hop.hop as f64 * 0.05).min(0.25); // Higher loss chance for testing
                 
                 if rand::random::<f64>() > packet_loss_chance {
                     let rtt = Duration::from_millis(base_latency + jitter);
@@ -859,7 +859,7 @@ impl MtrSession {
                         // Simulate realistic network behavior
                         let base_latency = hop.hop as u64 * 10 + 20; // Base latency increases with hops
                         let jitter = rand::random::<u64>() % 50; // Random jitter
-                        let packet_loss_chance = (hop.hop as f64 * 0.01).min(0.1); // Small loss chance
+                        let packet_loss_chance = (hop.hop as f64 * 0.05).min(0.25); // Higher loss chance for testing
                         
                         if rand::random::<f64>() > packet_loss_chance {
                             let rtt = Duration::from_millis(base_latency + jitter);

@@ -52,6 +52,12 @@ fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, sc
         return "".to_string();
     }
 
+    // Debug output
+    if hop.hop <= 3 && hop.sent > 0 {
+        tracing::debug!("Hop {}: sent={}, received={}, packet_history.len()={}, loss%={:.1}", 
+                        hop.hop, hop.sent, hop.received, hop.packet_history.len(), hop.loss_percent);
+    }
+
     // Use the chronological packet history from HopStats
     hop.packet_history
         .iter()
@@ -86,6 +92,7 @@ fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, sc
                     }
                 }
                 crate::hop_stats::PacketOutcome::Lost => '·', // Middle dot for lost packets
+                crate::hop_stats::PacketOutcome::Pending => '?', // Question mark for pending packets
             }
         })
         .collect::<String>()
@@ -241,7 +248,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     };
     
     let status_text = format!(
-        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} (·=lost) | Keys: 'q'=quit, 'r'=reset, 's'=scale",
+        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} (·=lost ?=pending) | Keys: 'q'=quit, 'r'=reset, 's'=scale",
         active_hops, total_sent, total_received, overall_loss, scale_name
     );
     

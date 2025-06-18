@@ -4,6 +4,7 @@ use std::{collections::VecDeque, net::IpAddr, time::Duration};
 pub enum PacketOutcome {
     Received(Duration), // RTT
     Lost,              // Timeout/no response
+    Pending,           // Sent but no response yet
 }
 
 #[derive(Debug, Clone)]
@@ -45,16 +46,20 @@ impl HopStats {
         self.last_rtt = Some(rtt);
         self.rtts.push_back(rtt);
         
-        // Add to packet history chronologically
-        self.packet_history.push_back(PacketOutcome::Received(rtt));
+        // Find the last pending packet and mark it as received
+        for outcome in self.packet_history.iter_mut().rev() {
+            if matches!(outcome, PacketOutcome::Pending) {
+                *outcome = PacketOutcome::Received(rtt);
+                break;
+            }
+        }
         
         if self.rtts.len() > 100 {
             self.rtts.pop_front();
         }
         
-        if self.packet_history.len() > 100 {
-            self.packet_history.pop_front();
-        }
+        tracing::debug!("add_rtt: hop={}, received={}, rtt={:.1}ms", 
+                        self.hop, self.received, rtt.as_secs_f64() * 1000.0);
 
         // Update statistics
         if self.best_rtt.is_none() || rtt < self.best_rtt.unwrap() {
@@ -71,12 +76,15 @@ impl HopStats {
     }
 
     pub fn add_timeout(&mut self) {
-        // Add lost packet to chronological history
-        self.packet_history.push_back(PacketOutcome::Lost);
-        
-        if self.packet_history.len() > 100 {
-            self.packet_history.pop_front();
+        // Find the oldest pending packet and mark it as lost
+        for outcome in self.packet_history.iter_mut() {
+            if matches!(outcome, PacketOutcome::Pending) {
+                *outcome = PacketOutcome::Lost;
+                break;
+            }
         }
+        
+        tracing::debug!("add_timeout: hop={}, packet_history.len()={}", self.hop, self.packet_history.len());
         
         self.update_loss_percent();
     }
@@ -89,6 +97,17 @@ impl HopStats {
 
     pub fn increment_sent(&mut self) {
         self.sent += 1;
+        
+        // Add pending packet to chronological history when sent
+        self.packet_history.push_back(PacketOutcome::Pending);
+        
+        if self.packet_history.len() > 100 {
+            self.packet_history.pop_front();
+        }
+        
+        tracing::debug!("increment_sent: hop={}, sent={}, packet_history.len()={}", 
+                        self.hop, self.sent, self.packet_history.len());
+        
         self.update_loss_percent();
     }
 }
