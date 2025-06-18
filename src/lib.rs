@@ -1,9 +1,9 @@
 pub mod args;
 pub mod hop_stats;
+pub mod report;
 pub mod session;
 pub mod sixel;
 pub mod ui;
-pub mod report;
 
 // Re-export commonly used types
 pub use args::{Args, SparklineScale};
@@ -12,5 +12,5 @@ pub use session::MtrSession;
 
 // Re-export external dependencies commonly used across modules
 pub use anyhow::Result;
+pub use std::net::IpAddr;
 pub use std::time::Duration;
-pub use std::net::IpAddr; 

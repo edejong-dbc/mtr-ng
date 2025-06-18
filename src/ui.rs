@@ -1,8 +1,8 @@
-use crate::{MtrSession, HopStats, Result};
-use crate::session::{NetworkEvent, RTTUpdate};
-use crate::SparklineScale;
 use crate::args::Column;
+use crate::session::NetworkEvent;
 use crate::sixel::SixelRenderer;
+use crate::SparklineScale;
+use crate::{HopStats, MtrSession, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -14,9 +14,7 @@ use ratatui::{
     style::{Color, Style},
     symbols,
     text::{Line, Span},
-    widgets::{
-        Axis, Block, Borders, Chart, Dataset, List, ListItem, Paragraph,
-    },
+    widgets::{Axis, Block, Borders, Chart, Dataset, List, ListItem, Paragraph},
     Frame, Terminal,
 };
 use std::{
@@ -24,8 +22,8 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tracing::debug;
 use tokio::sync::mpsc;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct UiState {
@@ -54,14 +52,14 @@ impl UiState {
             sixel_renderer: SixelRenderer::new(enable_sixel),
         }
     }
-    
+
     pub fn toggle_sparkline_scale(&mut self) {
         self.current_sparkline_scale = match self.current_sparkline_scale {
             SparklineScale::Linear => SparklineScale::Logarithmic,
             SparklineScale::Logarithmic => SparklineScale::Linear,
         };
     }
-    
+
     pub fn cycle_color_mode(&mut self) {
         self.color_support = match self.color_support {
             ColorSupport::None => ColorSupport::Basic,
@@ -70,15 +68,15 @@ impl UiState {
             ColorSupport::TrueColor => ColorSupport::None,
         };
     }
-    
+
     pub fn toggle_column(&mut self) {
         if !self.columns.is_empty() {
             self.current_column_index = (self.current_column_index + 1) % self.columns.len();
-            
+
             // Remove the current column and cycle to next available
             let all_columns = Column::all();
             let removed_column = self.columns.remove(self.current_column_index);
-            
+
             // Find next column not currently displayed
             for col in &all_columns {
                 if !self.columns.contains(col) && *col != removed_column {
@@ -86,20 +84,20 @@ impl UiState {
                     break;
                 }
             }
-            
+
             // Reset index if it's out of bounds
             if self.current_column_index >= self.columns.len() {
                 self.current_column_index = 0;
             }
         }
     }
-    
+
     pub fn add_column(&mut self, column: Column) {
         if !self.columns.contains(&column) {
             self.columns.push(column);
         }
     }
-    
+
     pub fn remove_column(&mut self, column: Column) {
         if let Some(pos) = self.columns.iter().position(|&c| c == column) {
             self.columns.remove(pos);
@@ -108,7 +106,7 @@ impl UiState {
             }
         }
     }
-    
+
     pub fn get_header(&self) -> String {
         let mut header = String::from("  ");
         for (i, column) in self.columns.iter().enumerate() {
@@ -116,7 +114,7 @@ impl UiState {
                 header.push(' ');
             }
             match column {
-                Column::Hop => {}, // No header for hop number column
+                Column::Hop => {} // No header for hop number column
                 Column::Host => header.push_str(&format!("{:21}", column.header())),
                 Column::Graph => header.push_str(column.header()),
                 _ => header.push_str(&format!("{:>8}", column.header())),
@@ -134,7 +132,7 @@ fn detect_color_support() -> ColorSupport {
             return ColorSupport::TrueColor;
         }
     }
-    
+
     if let Ok(term) = std::env::var("TERM") {
         if term.contains("256") || term.contains("256color") {
             tracing::debug!("Detected 256 color support from TERM={}", term);
@@ -145,22 +143,30 @@ fn detect_color_support() -> ColorSupport {
             return ColorSupport::Basic;
         }
     }
-    
+
     // Default to basic color support for interactive terminals
     tracing::debug!("Using default basic color support");
     ColorSupport::Basic
 }
 
-
-
-fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale, color_support: ColorSupport, sixel_renderer: &SixelRenderer) -> Vec<Span<'static>> {
+fn generate_colored_sparkline(
+    hop: &crate::HopStats,
+    global_max_rtt: u64,
+    scale: SparklineScale,
+    color_support: ColorSupport,
+    sixel_renderer: &SixelRenderer,
+) -> Vec<Span<'static>> {
     if hop.sent == 0 {
         return vec![];
     }
-    
+
     // If Sixel is enabled and we have data, try to generate Sixel sparkline
     if sixel_renderer.enabled && !hop.rtts.is_empty() {
-        let rtt_data: Vec<f64> = hop.rtts.iter().map(|rtt| rtt.as_secs_f64() * 1000.0).collect(); // Convert to milliseconds
+        let rtt_data: Vec<f64> = hop
+            .rtts
+            .iter()
+            .map(|rtt| rtt.as_secs_f64() * 1000.0)
+            .collect(); // Convert to milliseconds
         if !rtt_data.is_empty() {
             let sixel_graph = sixel_renderer.generate_sparkline(&rtt_data, 24, 12); // Better size for visibility
             if !sixel_graph.is_empty() {
@@ -177,9 +183,7 @@ fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale:
                 crate::hop_stats::PacketOutcome::Received(rtt) => {
                     let rtt_ms = (rtt.as_secs_f64() * 1000.0) as u64;
                     let ratio = match scale {
-                        SparklineScale::Linear => {
-                            rtt_ms as f64 / global_max_rtt as f64
-                        }
+                        SparklineScale::Linear => rtt_ms as f64 / global_max_rtt as f64,
                         SparklineScale::Logarithmic => {
                             if rtt_ms == 0 || global_max_rtt == 0 {
                                 0.0
@@ -189,7 +193,7 @@ fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale:
                             }
                         }
                     };
-                    
+
                     let (char, color) = get_rtt_char_and_color(ratio, color_support);
                     Span::styled(char.to_string(), Style::default().fg(color))
                 }
@@ -211,7 +215,7 @@ fn get_rtt_char_and_color(ratio: f64, color_support: ColorSupport) -> (char, Col
     let char = match level {
         0 => '▁', // Always show at least minimal bar instead of space
         1 => '▁',
-        2 => '▂', 
+        2 => '▂',
         3 => '▃',
         4 => '▄',
         5 => '▅',
@@ -219,51 +223,51 @@ fn get_rtt_char_and_color(ratio: f64, color_support: ColorSupport) -> (char, Col
         7 => '▇',
         _ => '█',
     };
-    
+
     // Colorblind-friendly color scheme based on RTT level
     let color = match color_support {
         ColorSupport::None => Color::White,
         ColorSupport::Basic => {
             // Use basic 16 colors - green to red spectrum that works for colorblind users
             match level {
-                0..=1 => Color::Green,      // Fast - green
-                2..=3 => Color::Cyan,       // Good - cyan 
-                4..=5 => Color::Yellow,     // Medium - yellow
-                6..=7 => Color::Magenta,    // Slow - magenta
-                _ => Color::Red,            // Very slow - red
+                0..=1 => Color::Green,   // Fast - green
+                2..=3 => Color::Cyan,    // Good - cyan
+                4..=5 => Color::Yellow,  // Medium - yellow
+                6..=7 => Color::Magenta, // Slow - magenta
+                _ => Color::Red,         // Very slow - red
             }
         }
         ColorSupport::Extended => {
             // Use 256-color palette for smoother gradation
             // Using colorblind-friendly blues to oranges/reds
             match level {
-                0 => Color::Indexed(22),    // Dark green
-                1 => Color::Indexed(28),    // Green
-                2 => Color::Indexed(34),    // Light green  
-                3 => Color::Indexed(40),    // Green-cyan
-                4 => Color::Indexed(220),   // Yellow
-                5 => Color::Indexed(214),   // Orange
-                6 => Color::Indexed(208),   // Dark orange
-                7 => Color::Indexed(196),   // Red
-                _ => Color::Indexed(160),   // Dark red
+                0 => Color::Indexed(22),  // Dark green
+                1 => Color::Indexed(28),  // Green
+                2 => Color::Indexed(34),  // Light green
+                3 => Color::Indexed(40),  // Green-cyan
+                4 => Color::Indexed(220), // Yellow
+                5 => Color::Indexed(214), // Orange
+                6 => Color::Indexed(208), // Dark orange
+                7 => Color::Indexed(196), // Red
+                _ => Color::Indexed(160), // Dark red
             }
         }
         ColorSupport::TrueColor => {
             // Use RGB colors for finest gradation - colorblind safe palette
             match level {
-                0 => Color::Rgb(0, 100, 0),      // Dark green
-                1 => Color::Rgb(0, 150, 0),      // Green
-                2 => Color::Rgb(100, 200, 0),    // Yellow-green
-                3 => Color::Rgb(200, 200, 0),    // Yellow
-                4 => Color::Rgb(255, 150, 0),    // Orange
-                5 => Color::Rgb(255, 100, 0),    // Dark orange
-                6 => Color::Rgb(255, 50, 0),     // Red-orange
-                7 => Color::Rgb(200, 0, 0),      // Red
-                _ => Color::Rgb(150, 0, 0),      // Dark red
+                0 => Color::Rgb(0, 100, 0),   // Dark green
+                1 => Color::Rgb(0, 150, 0),   // Green
+                2 => Color::Rgb(100, 200, 0), // Yellow-green
+                3 => Color::Rgb(200, 200, 0), // Yellow
+                4 => Color::Rgb(255, 150, 0), // Orange
+                5 => Color::Rgb(255, 100, 0), // Dark orange
+                6 => Color::Rgb(255, 50, 0),  // Red-orange
+                7 => Color::Rgb(200, 0, 0),   // Red
+                _ => Color::Rgb(150, 0, 0),   // Dark red
             }
         }
     };
-    
+
     (char, color)
 }
 
@@ -287,22 +291,40 @@ fn get_pending_packet_color(color_support: ColorSupport) -> Color {
     }
 }
 
-fn generate_row_spans(hop: &crate::HopStats, hostname: &str, loss_color: Color, sparkline_spans: &[Span<'static>], columns: &[Column]) -> Vec<Span<'static>> {
+fn generate_row_spans(
+    hop: &crate::HopStats,
+    hostname: &str,
+    loss_color: Color,
+    sparkline_spans: &[Span<'static>],
+    columns: &[Column],
+) -> Vec<Span<'static>> {
     let mut row_spans = Vec::new();
-    
+
     for column in columns {
         match column {
             Column::Hop => {
-                row_spans.push(Span::styled(format!("{:2}.", hop.hop), Style::default().fg(Color::White)));
+                row_spans.push(Span::styled(
+                    format!("{:2}.", hop.hop),
+                    Style::default().fg(Color::White),
+                ));
             }
             Column::Host => {
-                row_spans.push(Span::styled(format!("{:21}", hostname), Style::default().fg(Color::Cyan)));
+                row_spans.push(Span::styled(
+                    format!("{:21}", hostname),
+                    Style::default().fg(Color::Cyan),
+                ));
             }
             Column::Loss => {
-                row_spans.push(Span::styled(format!("{:6.1}%", hop.loss_percent), Style::default().fg(loss_color)));
+                row_spans.push(Span::styled(
+                    format!("{:6.1}%", hop.loss_percent),
+                    Style::default().fg(loss_color),
+                ));
             }
             Column::Sent => {
-                row_spans.push(Span::styled(format!("{:4}", hop.sent), Style::default().fg(Color::Gray)));
+                row_spans.push(Span::styled(
+                    format!("{:4}", hop.sent),
+                    Style::default().fg(Color::Gray),
+                ));
             }
             Column::Last => {
                 let value = if let Some(rtt) = hop.last_rtt {
@@ -366,22 +388,19 @@ fn generate_row_spans(hop: &crate::HopStats, hostname: &str, loss_color: Color, 
             }
         }
     }
-    
+
     row_spans
 }
-
-
-
 
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),  // Header
-            Constraint::Min(8),     // Main table
-            Constraint::Length(5),  // RTT graph
-            Constraint::Length(3),  // Status bar
+            Constraint::Length(3), // Header
+            Constraint::Min(8),    // Main table
+            Constraint::Length(5), // RTT graph
+            Constraint::Length(3), // Status bar
         ])
         .split(f.size());
 
@@ -390,7 +409,11 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         "mtr-ng: {} → {} ({})",
         "localhost", session.target, session.target_addr
     ))
-    .block(Block::default().borders(Borders::ALL).title("Network Trace"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Network Trace"),
+    );
     f.render_widget(header, chunks[0]);
 
     // Calculate global max RTT for sparkline scaling across all hops
@@ -418,13 +441,17 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
             };
 
             let hostname = if session.args.numeric {
-                hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
+                hop.addr
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| "???".to_string())
             } else {
-                hop.hostname.clone().unwrap_or_else(|| 
-                    hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
-                )
+                hop.hostname.clone().unwrap_or_else(|| {
+                    hop.addr
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| "???".to_string())
+                })
             };
-            
+
             // Truncate hostname to fit in column (20 chars max)
             let hostname = if hostname.len() > 20 {
                 format!("{}...", &hostname[..17])
@@ -432,24 +459,33 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 hostname
             };
 
-
-
             // Generate colored sparkline for RTT history including lost packets
-            let sparkline_spans = generate_colored_sparkline(hop, global_max_rtt, ui_state.current_sparkline_scale, ui_state.color_support, &ui_state.sixel_renderer);
+            let sparkline_spans = generate_colored_sparkline(
+                hop,
+                global_max_rtt,
+                ui_state.current_sparkline_scale,
+                ui_state.color_support,
+                &ui_state.sixel_renderer,
+            );
 
             // Generate row data based on selected columns
-            let row_spans = generate_row_spans(hop, &hostname, loss_color, &sparkline_spans, &ui_state.columns);
+            let row_spans = generate_row_spans(
+                hop,
+                &hostname,
+                loss_color,
+                &sparkline_spans,
+                &ui_state.columns,
+            );
 
             ListItem::new(Line::from(row_spans))
         })
         .collect();
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(ui_state.get_header())
-        );
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(ui_state.get_header()),
+    );
     f.render_widget(list, chunks[1]);
 
     // RTT Graph for the target host
@@ -463,7 +499,10 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 
         if !data.is_empty() {
             let max_rtt = data.iter().map(|(_, rtt)| *rtt).fold(0.0, f64::max);
-            let min_rtt = data.iter().map(|(_, rtt)| *rtt).fold(f64::INFINITY, f64::min);
+            let min_rtt = data
+                .iter()
+                .map(|(_, rtt)| *rtt)
+                .fold(f64::INFINITY, f64::min);
 
             let datasets = vec![Dataset::default()
                 .name("RTT")
@@ -497,26 +536,26 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     } else {
         0.0
     };
-    
+
     let active_hops = session.hops.iter().filter(|h| h.sent > 0).count();
-    
+
     let scale_name = match ui_state.current_sparkline_scale {
         SparklineScale::Linear => "Linear",
         SparklineScale::Logarithmic => "Log",
     };
-    
+
     let color_name = match ui_state.color_support {
         ColorSupport::None => "No Color",
         ColorSupport::Basic => "16 Colors",
-        ColorSupport::Extended => "256 Colors", 
+        ColorSupport::Extended => "256 Colors",
         ColorSupport::TrueColor => "RGB Colors",
     };
-    
+
     let status_text = format!(
         "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} | Colors: {} | Keys: 'q'=quit, 'r'=reset, 's'=scale, 'c'=colors, 'f'=fields",
         active_hops, total_sent, total_received, overall_loss, scale_name, color_name
     );
-    
+
     let status_color = if overall_loss > 50.0 {
         Color::Red
     } else if overall_loss > 10.0 {
@@ -524,7 +563,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     } else {
         Color::Green
     };
-    
+
     let status = Paragraph::new(status_text)
         .style(Style::default().fg(status_color))
         .block(Block::default().borders(Borders::ALL).title("Status"));
@@ -542,10 +581,14 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     // Shared state for the UI and trace runner
     let session_arc = Arc::new(Mutex::new(session.clone()));
     let session_clone = Arc::clone(&session_arc);
-    
+
     // Create UI state with initial sparkline scale and columns from args
-    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns(), session.args.sixel);
-    
+    let mut ui_state = UiState::new(
+        session.args.sparkline_scale,
+        session.args.get_columns(),
+        session.args.sixel,
+    );
+
     // Create update notification channel for real-time updates
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<()>();
 
@@ -561,7 +604,7 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     // Start the MTR algorithm in a background task with proper real-time updates
     let trace_handle = {
         let session_for_trace = Arc::clone(&session_clone);
-        
+
         tokio::spawn(async move {
             // Run the real-time MTR algorithm that triggers UI updates on each ping response
             if let Err(e) = MtrSession::run_trace_with_realtime_updates(session_for_trace).await {
@@ -577,14 +620,14 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     loop {
         // Check for real-time update notifications or fallback timer
         let should_update = update_rx.try_recv().is_ok() || last_tick.elapsed() >= tick_rate;
-        
+
         if should_update {
             // Create a snapshot of session data and release lock immediately
             let session_snapshot = {
                 let session_guard = session_clone.lock().unwrap();
                 session_guard.clone()
             }; // Lock released here!
-            
+
             // Render using the snapshot (no lock held during UI rendering)
             terminal.draw(|f| render_ui(f, &session_snapshot, &ui_state))?;
             last_tick = Instant::now();
@@ -644,11 +687,15 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
     let mut terminal = Terminal::new(backend)?;
 
     // Create UI state with initial sparkline scale and columns from args
-    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns(), session.args.sixel);
+    let mut ui_state = UiState::new(
+        session.args.sparkline_scale,
+        session.args.get_columns(),
+        session.args.sixel,
+    );
 
     // Create channel for receiving network updates
     let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<NetworkEvent>();
-    
+
     // Start the network trace in a background task
     let trace_handle = {
         let session_clone = session.clone();
@@ -736,14 +783,14 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
 
 // Channel-based network trace that sends events instead of using shared state
 async fn run_network_trace_with_events(
-    session: MtrSession, 
-    event_sender: mpsc::UnboundedSender<NetworkEvent>
+    session: MtrSession,
+    event_sender: mpsc::UnboundedSender<NetworkEvent>,
 ) -> Result<()> {
     use std::sync::{Arc, Mutex};
-    
+
     // Create a modified session that sends events via channel
     let session_arc = Arc::new(Mutex::new(session));
-    
+
     // Set up a callback that sends channel events when RTT updates arrive
     {
         let mut session_guard = session_arc.lock().unwrap();
@@ -755,11 +802,7 @@ async fn run_network_trace_with_events(
             let _ = sender_clone.send(NetworkEvent::RoundComplete { round: 0 });
         }));
     }
-    
+
     // Run the existing mutex-based trace
     MtrSession::run_trace_with_realtime_updates(session_arc).await
 }
-
-
-
- 

@@ -54,7 +54,7 @@ impl Column {
     }
 
     /// Get default columns (excludes jitter by default for backwards compatibility)
-    pub fn default() -> Vec<Column> {
+    pub fn default_columns() -> Vec<Column> {
         vec![
             Column::Hop,
             Column::Host,
@@ -108,7 +108,9 @@ impl Column {
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "mtr-ng")]
-#[command(about = "A modern implementation of mtr (My Traceroute) with unicode and terminal graphics")]
+#[command(
+    about = "A modern implementation of mtr (My Traceroute) with unicode and terminal graphics"
+)]
 #[command(version = "0.1.0")]
 pub struct Args {
     /// Target hostname or IP address
@@ -163,7 +165,7 @@ impl Args {
         } else if let Some(ref fields) = self.fields {
             fields.clone()
         } else {
-            Column::default()
+            Column::default_columns()
         }
     }
 }
@@ -174,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_args_default_values() {
-        let args = Args::try_parse_from(&["mtr-ng", "example.com"]).unwrap();
+        let args = Args::try_parse_from(["mtr-ng", "example.com"]).unwrap();
         assert_eq!(args.target, "example.com");
         assert_eq!(args.count, None); // Default is now infinite (None)
         assert_eq!(args.interval, 1000);
@@ -189,16 +191,20 @@ mod tests {
 
     #[test]
     fn test_args_custom_values() {
-        let args = Args::try_parse_from(&[
+        let args = Args::try_parse_from([
             "mtr-ng",
-            "--count", "20",
-            "--interval", "500", 
-            "--max-hops", "50",
+            "--count",
+            "20",
+            "--interval",
+            "500",
+            "--max-hops",
+            "50",
             "--report",
             "--numeric",
-            "google.com"
-        ]).unwrap();
-        
+            "google.com",
+        ])
+        .unwrap();
+
         assert_eq!(args.target, "google.com");
         assert_eq!(args.count, Some(20));
         assert_eq!(args.interval, 500);
@@ -213,16 +219,20 @@ mod tests {
 
     #[test]
     fn test_args_short_flags() {
-        let args = Args::try_parse_from(&[
+        let args = Args::try_parse_from([
             "mtr-ng",
-            "-c", "15",
-            "-i", "2000",
-            "-M", "25",
+            "-c",
+            "15",
+            "-i",
+            "2000",
+            "-M",
+            "25",
             "-r",
             "-n",
-            "test.example.com"
-        ]).unwrap();
-        
+            "test.example.com",
+        ])
+        .unwrap();
+
         assert_eq!(args.target, "test.example.com");
         assert_eq!(args.count, Some(15));
         assert_eq!(args.interval, 2000);
@@ -234,4 +244,4 @@ mod tests {
         assert!(args.fields.is_none());
         assert!(!args.show_all);
     }
-} 
+}

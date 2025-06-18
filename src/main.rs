@@ -5,7 +5,7 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     // Configure logging based on mode
     if args.report {
         // In report mode, we can safely log to stderr
@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
             .with_env_filter("mtr_ng=info")
             .with_writer(std::io::stderr)
             .init();
-            
+
         info!("Starting mtr-ng v0.1.0 (Report Mode)");
         info!("Target: {}", args.target);
     } else {
@@ -26,12 +26,12 @@ async fn main() -> Result<()> {
                 // If we can't create log file, just use a null writer
                 std::fs::File::create("/dev/null").expect("Failed to create null device")
             });
-            
+
         tracing_subscriber::fmt()
             .with_env_filter("mtr_ng=debug")
             .with_writer(log_file)
             .init();
-            
+
         info!("Starting mtr-ng v0.1.0 (Interactive Mode)");
         info!("Target: {}", args.target);
     }
@@ -43,4 +43,4 @@ async fn main() -> Result<()> {
     } else {
         run_interactive(session).await
     }
-} 
+}

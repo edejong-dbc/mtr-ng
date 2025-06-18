@@ -1,5 +1,5 @@
-use crate::{MtrSession, Result};
 use crate::args::Column;
+use crate::{MtrSession, Result};
 
 fn format_column_headers(columns: &[Column]) -> String {
     let mut header = String::new();
@@ -8,8 +8,8 @@ fn format_column_headers(columns: &[Column]) -> String {
             header.push(' ');
         }
         match column {
-            Column::Hop => {}, // No header padding needed
-            Column::Host => {}, // No header padding needed  
+            Column::Hop => {}  // No header padding needed
+            Column::Host => {} // No header padding needed
             Column::Loss => header.push_str("Loss%"),
             Column::Sent => header.push_str(" Snt"),
             Column::Last => header.push_str(" Last"),
@@ -25,7 +25,12 @@ fn format_column_headers(columns: &[Column]) -> String {
     header
 }
 
-fn format_row_data(hop: &crate::HopStats, hostname: &str, columns: &[Column], stddev: f64) -> String {
+fn format_row_data(
+    hop: &crate::HopStats,
+    hostname: &str,
+    columns: &[Column],
+    stddev: f64,
+) -> String {
     let mut row = String::new();
     for (i, column) in columns.iter().enumerate() {
         if i > 0 {
@@ -98,10 +103,19 @@ pub async fn run_report(mut session: MtrSession) -> Result<()> {
 
     let columns = session.args.get_columns();
 
-    println!("Start: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
-    println!("HOST: {} → {} ({})", "localhost", session.target, session.target_addr);
+    println!(
+        "Start: {}",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+    );
+    println!(
+        "HOST: localhost → {} ({})",
+        session.target, session.target_addr
+    );
     println!();
-    println!("                             {}", format_column_headers(&columns));
+    println!(
+        "                             {}",
+        format_column_headers(&columns)
+    );
 
     for hop in &session.hops {
         if hop.sent == 0 {
@@ -109,21 +123,28 @@ pub async fn run_report(mut session: MtrSession) -> Result<()> {
         }
 
         let hostname = if session.args.numeric {
-            hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
+            hop.addr
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "???".to_string())
         } else {
-            hop.hostname.clone().unwrap_or_else(|| 
-                hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
-            )
+            hop.hostname.clone().unwrap_or_else(|| {
+                hop.addr
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| "???".to_string())
+            })
         };
 
         let stddev = if hop.received > 1 && hop.rtts.len() > 1 {
             let mean = hop.avg_rtt.unwrap().as_secs_f64() * 1000.0;
-            let variance = hop.rtts.iter()
+            let variance = hop
+                .rtts
+                .iter()
                 .map(|rtt| {
                     let diff = rtt.as_secs_f64() * 1000.0 - mean;
                     diff * diff
                 })
-                .sum::<f64>() / (hop.rtts.len() - 1) as f64;
+                .sum::<f64>()
+                / (hop.rtts.len() - 1) as f64;
             variance.sqrt()
         } else {
             0.0
@@ -133,4 +154,4 @@ pub async fn run_report(mut session: MtrSession) -> Result<()> {
     }
 
     Ok(())
-} 
+}
