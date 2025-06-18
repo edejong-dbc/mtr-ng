@@ -110,43 +110,7 @@ fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, sc
         .collect::<String>()
 }
 
-fn generate_sparkline(sparkline_data: &[u64], global_max_rtt: u64, scale: SparklineScale) -> String {
-    if sparkline_data.is_empty() {
-        return "".to_string();
-    }
-    
-    sparkline_data
-        .iter()
-        .map(|&rtt| {
-            let ratio = match scale {
-                SparklineScale::Linear => {
-                    rtt as f64 / global_max_rtt as f64
-                }
-                SparklineScale::Logarithmic => {
-                    if rtt == 0 || global_max_rtt == 0 {
-                        0.0
-                    } else {
-                        // Logarithmic scaling: log(rtt + 1) / log(max_rtt + 1)
-                        // Adding 1 to avoid log(0)
-                        ((rtt + 1) as f64).ln() / ((global_max_rtt + 1) as f64).ln()
-                    }
-                }
-            };
-            
-            match (ratio * 8.0) as usize {
-                0 => ' ',
-                1 => '▁',
-                2 => '▂',
-                3 => '▃',
-                4 => '▄',
-                5 => '▅',
-                6 => '▆',
-                7 => '▇',
-                _ => '█',
-            }
-        })
-        .collect::<String>()
-}
+
 
 
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
