@@ -16,33 +16,48 @@ impl SixelRenderer {
     
     /// Detect if the current terminal supports Sixel graphics
     pub fn detect_sixel_support() -> bool {
+        // Temporarily disable auto-detection to force fallback mode
+        // TODO: Re-enable when Sixel implementation is working correctly
+        false
+        
         // Check environment variables for Sixel support
-        if let Ok(term) = std::env::var("TERM") {
-            // Known Sixel-capable terminals
-            term.contains("xterm") || 
-            term.contains("sixel") || 
-            term.contains("mlterm") ||
-            term.contains("foot") ||
-            term.contains("wezterm")
-        } else {
-            false
-        }
+        // if let Ok(term) = std::env::var("TERM") {
+        //     // Known Sixel-capable terminals
+        //     term.contains("xterm") || 
+        //     term.contains("sixel") || 
+        //     term.contains("mlterm") ||
+        //     term.contains("foot") ||
+        //     term.contains("wezterm")
+        // } else {
+        //     false
+        // }
     }
     
     /// Generate sparkline using Sixel graphics
-    pub fn generate_sparkline(&self, data: &[f64], width: u32, height: u32) -> String {
-        if !self.enabled || data.is_empty() {
-            return self.fallback_sparkline(data);
-        }
+    pub fn generate_sparkline(&self, data: &[f64], _width: u32, _height: u32) -> String {
+        // For now, always use fallback until Sixel implementation is perfected
+        // TODO: Re-enable Sixel when terminal compatibility issues are resolved
+        self.fallback_sparkline(data)
         
-        match self.create_sixel_sparkline(data, width, height) {
-            Ok(sixel) => sixel,
-            Err(_) => self.fallback_sparkline(data), // Fall back on error
-        }
+        // if !self.enabled || data.is_empty() {
+        //     return self.fallback_sparkline(data);
+        // }
+        // 
+        // match self.create_sixel_sparkline(data, width, height) {
+        //     Ok(sixel) => {
+        //         // For debugging: if the sixel is very short, fall back
+        //         if sixel.len() < 10 {
+        //             self.fallback_sparkline(data)
+        //         } else {
+        //             sixel
+        //         }
+        //     },
+        //     Err(_) => self.fallback_sparkline(data), // Fall back on error
+        // }
     }
     
     /// Create Sixel sparkline from data
-    fn create_sixel_sparkline(&self, data: &[f64], width: u32, height: u32) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn create_sixel_sparkline(&self, data: &[f64], width: u32, height: u32) -> Result<String, Box<dyn std::error::Error>> {
         if data.is_empty() {
             return Ok(String::new());
         }
@@ -127,23 +142,28 @@ impl SixelRenderer {
                         let color_idx = colors.len();
                         colors.push(color);
                         color_map.insert(color, color_idx);
-                        
-                        // Define color in palette
-                        let r_pct = (r as f32 / 255.0 * 100.0) as u8;
-                        let g_pct = (g as f32 / 255.0 * 100.0) as u8;
-                        let b_pct = (b as f32 / 255.0 * 100.0) as u8;
-                        output.push_str(&format!("#{};2;{};{};{}", color_idx, r_pct, g_pct, b_pct));
                     }
                 }
             }
         }
         
-        // Process each color separately
-        for (color_idx, &color) in colors.iter().enumerate() {
-            output.push_str(&format!("#{}", color_idx));
-            
-            // Process image in 6-pixel high bands for this color
-            for band_y in (0..height).step_by(6) {
+        // Define palette colors upfront
+        for (color_idx, &[r, g, b]) in colors.iter().enumerate() {
+            let r_pct = (r as f32 / 255.0 * 100.0) as u8;
+            let g_pct = (g as f32 / 255.0 * 100.0) as u8;
+            let b_pct = (b as f32 / 255.0 * 100.0) as u8;
+            output.push_str(&format!("#{};2;{};{};{}", color_idx, r_pct, g_pct, b_pct));
+        }
+        
+        // Process image in 6-pixel high bands
+        for band_y in (0..height).step_by(6) {
+            // For each color in this band
+            for (color_idx, &color) in colors.iter().enumerate() {
+                output.push_str(&format!("#{}", color_idx));
+                
+                let mut has_pixels = false;
+                
+                // Process each column in this band for this color
                 for x in 0..width {
                     let mut sixel_char = 0u8;
                     
@@ -160,27 +180,24 @@ impl SixelRenderer {
                                 
                                 if [r, g, b] == color {
                                     sixel_char |= 1 << pixel_y;
+                                    has_pixels = true;
                                 }
                             }
                         }
                     }
                     
-                    // Output sixel character
-                    if sixel_char > 0 {
-                        output.push(char::from(sixel_char + 63));
-                    } else {
-                        output.push('?');
-                    }
+                    // Output sixel character (63 is added to make it printable)
+                    output.push(char::from(sixel_char + 63));
                 }
                 
-                // End of line for this band
-                output.push('$');
-                if band_y + 6 < height {
-                    output.push('-');
+                // End of line for this color in this band
+                if has_pixels {
+                    output.push('$'); // Carriage return
                 }
             }
             
-            if color_idx < colors.len() - 1 {
+            // Line feed to next band
+            if band_y + 6 < height {
                 output.push('-');
             }
         }

@@ -162,7 +162,7 @@ fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale:
     if sixel_renderer.enabled && !hop.rtts.is_empty() {
         let rtt_data: Vec<f64> = hop.rtts.iter().map(|rtt| rtt.as_secs_f64() * 1000.0).collect(); // Convert to milliseconds
         if !rtt_data.is_empty() {
-            let sixel_graph = sixel_renderer.generate_sparkline(&rtt_data, 20, 6); // Small inline size
+            let sixel_graph = sixel_renderer.generate_sparkline(&rtt_data, 24, 12); // Better size for visibility
             if !sixel_graph.is_empty() {
                 return vec![Span::raw(sixel_graph)];
             }
