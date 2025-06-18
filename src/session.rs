@@ -11,13 +11,19 @@ use std::{
     mem::MaybeUninit,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     time::{Duration, Instant},
+    sync::Arc,
 };
 use tokio::time;
 use tracing::{debug, info, warn};
 use trust_dns_resolver::{config::*, TokioAsyncResolver};
+use anyhow::anyhow;
+use rand;
 
 const MIN_SEQUENCE: u16 = 33000;
 const MAX_SEQUENCE: u16 = 65535;
+
+// Add callback type for real-time updates
+pub type UpdateCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct SequenceEntry {
@@ -27,7 +33,7 @@ pub struct SequenceEntry {
     pub send_time: Instant, // when packet was sent
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MtrSession {
     pub target: String,
     pub target_addr: IpAddr,
@@ -39,6 +45,7 @@ pub struct MtrSession {
     pub sequence_table: HashMap<u16, SequenceEntry>, // sequence -> entry (like original mtr)
     pub batch_at: usize, // current hop index being sent (like original mtr)
     pub num_hosts: usize, // number of active hops
+    pub update_callback: Option<UpdateCallback>, // callback for real-time updates
 }
 
 impl MtrSession {
@@ -56,7 +63,7 @@ impl MtrSession {
             response
                 .iter()
                 .next()
-                .ok_or_else(|| anyhow::anyhow!("Failed to resolve hostname"))?
+                .ok_or_else(|| anyhow!("Failed to resolve hostname"))?
         };
 
         let hops = (1..=args.max_hops).map(HopStats::new).collect();
@@ -73,6 +80,7 @@ impl MtrSession {
             sequence_table: HashMap::new(),
             batch_at: 0, // Start at hop 1 (index 0)
             num_hosts: 10, // Initial estimate
+            update_callback: None,
         })
     }
 
@@ -190,17 +198,36 @@ impl MtrSession {
     
     // Equivalent to net_send_query in original mtr
     async fn net_send_query(&mut self, target: Ipv4Addr, send_socket: &Socket, index: usize) -> Result<()> {
-        let seq = self.new_sequence(index);
+        let seq = self.prepare_sequence(index);
         let time_to_live = (index + 1) as u32;
         
         debug!("Sending probe: hop={}, TTL={}, seq={}", index + 1, time_to_live, seq);
         
         Self::send_icmp_packet_static(send_socket, target, time_to_live, self.packet_id, seq)?;
         
+        // Record actual send time after packet transmission
+        self.save_sequence_with_send_time(index, seq, Instant::now());
+        
         Ok(())
     }
     
-    // Equivalent to new_sequence and save_sequence in original mtr
+    // Prepare sequence without recording send time yet
+    fn prepare_sequence(&mut self, index: usize) -> u16 {
+        let seq = self.next_sequence;
+        
+        // Advance sequence (with wraparound like original)
+        self.next_sequence += 1;
+        if self.next_sequence >= MAX_SEQUENCE {
+            self.next_sequence = MIN_SEQUENCE;
+        }
+        
+        // Only increment sent counter, don't record send time yet
+        self.hops[index].increment_sent();
+        
+        seq
+    }
+    
+    // Equivalent to new_sequence and save_sequence in original mtr (for compatibility)
     fn new_sequence(&mut self, index: usize) -> u16 {
         let seq = self.next_sequence;
         
@@ -233,10 +260,46 @@ impl MtrSession {
         debug!("Saved sequence: seq={}, hop={}, sent_count={}", seq, index + 1, self.hops[index].sent);
     }
     
+    fn save_sequence_with_send_time(&mut self, index: usize, seq: u16, send_time: Instant) {
+        // Clean up old sequence entries to prevent memory leaks and collisions
+        self.cleanup_old_sequences();
+        
+        // Record sequence entry with actual send time
+        let entry = SequenceEntry {
+            index,
+            transit: true,
+            saved_seq: self.hops[index].sent as u32,
+            send_time,
+        };
+        
+        self.sequence_table.insert(seq, entry);
+        
+        debug!("Saved sequence: seq={}, hop={}, sent_count={}", seq, index + 1, self.hops[index].sent);
+    }
+    
+    fn cleanup_old_sequences(&mut self) {
+        // Remove entries older than 5 seconds to prevent sequence number collisions
+        let cutoff_time = Instant::now() - Duration::from_secs(5);
+        self.sequence_table.retain(|seq, entry| {
+            if entry.send_time < cutoff_time {
+                debug!("Cleaned up old sequence entry: seq={}", seq);
+                false
+            } else {
+                true
+            }
+        });
+    }
+    
     // Equivalent to mark_sequence_complete in original mtr
     fn mark_sequence_complete(&mut self, seq: u16) -> Option<(usize, Instant)> {
         if let Some(entry) = self.sequence_table.remove(&seq) {
             if entry.transit {
+                // Validate that response isn't too old (prevents sequence number collision issues)
+                let age = entry.send_time.elapsed();
+                if age.as_secs() > 5 {
+                    debug!("Discarding very old response for seq {} (age: {:.1}s)", seq, age.as_secs_f64());
+                    return None;
+                }
                 return Some((entry.index, entry.send_time));
             }
         }
@@ -287,6 +350,11 @@ impl MtrSession {
         // Check if we reached the target
         if addr == target && matches!(icmp_type, IcmpTypes::EchoReply) {
             info!("Reached target {} at hop {}", target, index + 1);
+        }
+        
+        // Trigger real-time UI update when a response arrives
+        if let Some(callback) = &self.update_callback {
+            callback();
         }
     }
     
@@ -348,14 +416,14 @@ impl MtrSession {
             }
         }
         
-        Err(anyhow::anyhow!("No valid response received"))
+        Err(anyhow!("No valid response received"))
     }
 
     fn send_icmp_packet_static(socket: &Socket, target: Ipv4Addr, ttl: u32, id: u16, sequence: u16) -> Result<()> {
         // Create ICMP echo request packet
         let mut icmp_buffer = [0u8; 64];
         let mut icmp_packet = pnet::packet::icmp::echo_request::MutableEchoRequestPacket::new(&mut icmp_buffer)
-            .ok_or_else(|| anyhow::anyhow!("Failed to create ICMP packet"))?;
+            .ok_or_else(|| anyhow!("Failed to create ICMP packet"))?;
         
         icmp_packet.set_icmp_type(IcmpTypes::EchoRequest);
         icmp_packet.set_icmp_code(pnet::packet::icmp::IcmpCode::new(0));
@@ -466,6 +534,312 @@ impl MtrSession {
             }
             
             time::sleep(Duration::from_millis(self.args.interval)).await;
+        }
+        
+        Ok(())
+    }
+
+    pub fn set_update_callback(&mut self, callback: UpdateCallback) {
+        self.update_callback = Some(callback);
+    }
+
+    // Run MTR algorithm directly on shared session for real-time UI updates
+    pub async fn run_trace_with_realtime_updates(session_arc: std::sync::Arc<std::sync::Mutex<Self>>) -> Result<()> {
+        // Extract basic configuration
+        let (target_addr, args) = {
+            let session = session_arc.lock().unwrap();
+            (session.target_addr, session.args.clone())
+        };
+        
+        info!("Starting real-time trace to {}", target_addr);
+        
+        match target_addr {
+            IpAddr::V4(ipv4) => Self::run_ipv4_trace_realtime(session_arc, ipv4, args).await,
+            IpAddr::V6(_) => {
+                warn!("IPv6 not yet implemented, falling back to simulation");
+                Self::run_simulated_trace_realtime(session_arc, args).await
+            }
+        }
+    }
+    
+    async fn run_ipv4_trace_realtime(session_arc: std::sync::Arc<std::sync::Mutex<Self>>, target: Ipv4Addr, args: Args) -> Result<()> {
+        // Try to create raw socket for ICMP
+        let socket_result = {
+            let session = session_arc.lock().unwrap();
+            session.create_raw_socket()
+        };
+        
+        match socket_result {
+            Ok((send_socket, recv_socket)) => {
+                info!("Using raw ICMP sockets for real traceroute");
+                Self::run_mtr_algorithm_realtime(session_arc, target, send_socket, recv_socket, args).await
+            }
+            Err(e) => {
+                warn!("Failed to create raw socket ({}), falling back to simulation. Try running with sudo for real traceroute.", e);
+                Self::run_simulated_trace_realtime(session_arc, args).await
+            }
+        }
+    }
+    
+    async fn run_mtr_algorithm_realtime(
+        session_arc: std::sync::Arc<std::sync::Mutex<Self>>, 
+        target: Ipv4Addr, 
+        send_socket: Socket, 
+        recv_socket: Socket,
+        args: Args
+    ) -> Result<()> {
+        for round in 0..args.count {
+            debug!("MTR Round {}/{}", round + 1, args.count);
+            
+            // Send batch to all hops in quick succession (proper MTR behavior)
+            Self::net_send_batch_realtime(&session_arc, target, &send_socket).await?;
+            
+            // Collect responses for this interval with real-time updates
+            let collect_duration = Duration::from_millis(args.interval);
+            let start_collect = Instant::now();
+            
+            while start_collect.elapsed() < collect_duration {
+                Self::net_process_return_realtime(&session_arc, &recv_socket, target).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            
+            debug!("Completed round {}/{}", round + 1, args.count);
+        }
+        
+        Ok(())
+    }
+    
+    async fn net_send_batch_realtime(
+        session_arc: &std::sync::Arc<std::sync::Mutex<Self>>, 
+        target: Ipv4Addr, 
+        send_socket: &Socket
+    ) -> Result<bool> {
+        let (max_hops, packet_id, num_hosts);
+        
+        // Extract configuration
+        {
+            let session = session_arc.lock().unwrap();
+            max_hops = session.args.max_hops;
+            packet_id = session.packet_id;
+            num_hosts = session.num_hosts;
+        }
+        
+        // Send one packet to each hop in quick succession (proper MTR batch)
+        let max_hop_to_send = if num_hosts > 0 { 
+            (num_hosts + 2).min(max_hops as usize) // Send a bit beyond discovered hops
+        } else { 
+            8.min(max_hops as usize) // Initial discovery
+        };
+        
+        for hop_index in 0..max_hop_to_send {
+            // Send query for this hop (extract packet info without holding lock)
+            let mut next_sequence;
+            
+            // Extract needed values first
+            {
+                let session = session_arc.lock().unwrap();
+                next_sequence = session.next_sequence;
+            }
+            
+            // Create sequence and prepare for sending
+            let seq = next_sequence;
+            next_sequence += 1;
+            if next_sequence >= MAX_SEQUENCE {
+                next_sequence = MIN_SEQUENCE;
+            }
+            
+            // Update session with new sequence and increment sent count (but no send_time yet)
+            {
+                let mut session = session_arc.lock().unwrap();
+                session.next_sequence = next_sequence;
+                session.hops[hop_index].increment_sent();
+            }
+            
+            // Send packet without holding any locks
+            let time_to_live = (hop_index + 1) as u32;
+            debug!("Sending batch probe: hop={}, TTL={}, seq={}", hop_index + 1, time_to_live, seq);
+            Self::send_icmp_packet_static(send_socket, target, time_to_live, packet_id, seq)?;
+            
+            // Record ACTUAL send time immediately after each packet is sent
+            let actual_send_time = Instant::now();
+            {
+                let mut session = session_arc.lock().unwrap();
+                let entry = SequenceEntry {
+                    index: hop_index,
+                    transit: true,
+                    saved_seq: session.hops[hop_index].sent as u32,
+                    send_time: actual_send_time, // Individual send time for each packet
+                };
+                session.sequence_table.insert(seq, entry);
+            }
+            
+            // Very small delay to avoid overwhelming network but not affect timing
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        
+        // Check restart conditions and update hop discovery
+        let mut restart = false;
+        let mut n_unknown = 0;
+        {
+            let mut session = session_arc.lock().unwrap();
+            
+            // Count unknown hops and check for target reached
+            for i in 0..max_hop_to_send {
+                if session.hops[i].addr.is_none() {
+                    n_unknown += 1;
+                } else if let Some(IpAddr::V4(addr)) = session.hops[i].addr {
+                    if addr == target {
+                        restart = true;
+                        session.num_hosts = i + 1;
+                        debug!("Target reached at hop {}", i + 1);
+                        break;
+                    }
+                }
+            }
+            
+            // Update num_hosts based on responses
+            if session.num_hosts == 0 && max_hop_to_send >= 8 {
+                session.num_hosts = max_hop_to_send;
+            }
+        }
+        
+        // Always restart after each complete batch (that's how MTR works)
+        Ok(true)
+    }
+    
+    async fn net_process_return_realtime(
+        session_arc: &std::sync::Arc<std::sync::Mutex<Self>>, 
+        recv_socket: &Socket, 
+        target: Ipv4Addr
+    ) {
+        // Try to read multiple responses
+        for _ in 0..10 {
+            match Self::receive_icmp_response(recv_socket) {
+                Ok((source_ip, icmp_type, seq, receive_time)) => {
+                    Self::net_process_ping_realtime(session_arc, seq, source_ip, icmp_type, receive_time, target).await;
+                }
+                Err(_) => break, // No more responses
+            }
+        }
+    }
+    
+    async fn net_process_ping_realtime(
+        session_arc: &std::sync::Arc<std::sync::Mutex<Self>>, 
+        seq: u16, 
+        addr: Ipv4Addr, 
+        icmp_type: IcmpType, 
+        receive_time: Instant, 
+        target: Ipv4Addr
+    ) {
+        let (index, send_time, callback) = {
+            let mut session = session_arc.lock().unwrap();
+            
+            let (index, send_time) = match session.mark_sequence_complete(seq) {
+                Some((idx, send_time)) => (idx, send_time),
+                None => {
+                    debug!("Received response for unknown sequence: {}", seq);
+                    return;
+                }
+            };
+            
+            // Calculate RTT properly using send time from sequence table
+            let rtt = receive_time.duration_since(send_time);
+            
+            debug!("Hop {}: Got {} from {} in {:.1}ms", 
+                   index + 1, icmp_type_name(icmp_type), addr, rtt.as_secs_f64() * 1000.0);
+            
+            // Update hop statistics (like original mtr)
+            session.hops[index].add_rtt(rtt);
+            
+            // Set hop address if not already set
+            if session.hops[index].addr.is_none() {
+                session.hops[index].addr = Some(IpAddr::V4(addr));
+                
+                if !session.args.numeric {
+                    session.hops[index].hostname = Some(addr.to_string());
+                }
+            }
+            
+            // Check if we reached the target
+            if addr == target && matches!(icmp_type, IcmpTypes::EchoReply) {
+                info!("Reached target {} at hop {}", target, index + 1);
+            }
+            
+            (index, send_time, session.update_callback.clone())
+        };
+        
+        // Trigger real-time UI update when a response arrives (outside lock)
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+
+        async fn run_simulated_trace_realtime(session_arc: std::sync::Arc<std::sync::Mutex<Self>>, args: Args) -> Result<()> {
+        info!("Running simulated traceroute (use sudo for real network tracing)");
+        
+        for round in 0..args.count {
+            debug!("Simulation Round {}", round + 1);
+            
+            // Get callback and config
+            let (callback, numeric) = {
+                let session = session_arc.lock().unwrap();
+                (session.update_callback.clone(), session.args.numeric)
+            };
+            
+            // Send batch: simulate each hop quickly (proper MTR batch behavior)
+            for hop_num in 1..=8 {
+                {
+                    let mut session = session_arc.lock().unwrap();
+                    if let Some(hop) = session.hops.get_mut(hop_num - 1) {
+                        hop.increment_sent();
+                        
+                        // Simulate realistic network behavior
+                        let base_latency = hop.hop as u64 * 10 + 20; // Base latency increases with hops
+                        let jitter = rand::random::<u64>() % 50; // Random jitter
+                        let packet_loss_chance = (hop.hop as f64 * 0.01).min(0.1); // Small loss chance
+                        
+                        if rand::random::<f64>() > packet_loss_chance {
+                            let rtt = Duration::from_millis(base_latency + jitter);
+                            hop.add_rtt(rtt);
+                            
+                            // Simulate realistic IP addresses and hostnames
+                            if hop.addr.is_none() {
+                                let hop_number = hop.hop;
+                                
+                                // Generate realistic-looking IP addresses
+                                match hop_number {
+                                    1 => {
+                                        hop.addr = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
+                                        hop.hostname = if !numeric { Some("gateway.local".to_string()) } else { None };
+                                    }
+                                    2..=3 => {
+                                        hop.addr = Some(IpAddr::V4(Ipv4Addr::new(10, 0, hop_number, 1)));
+                                        hop.hostname = if !numeric { Some(format!("core-{}.isp.net", hop_number)) } else { None };
+                                    }
+                                    _ => {
+                                        let final_octet = if hop_number >= 8 { 8 } else { hop_number };
+                                        hop.addr = Some(IpAddr::V4(Ipv4Addr::new(8, 8, 8, final_octet)));
+                                        hop.hostname = if !numeric { Some("dns.google".to_string()) } else { None };
+                                    }
+                                }
+                            }
+                        } else {
+                            hop.add_timeout();
+                        }
+                    }
+                }
+                
+                // Trigger UI update for each hop response
+                if let Some(callback) = &callback {
+                    callback();
+                }
+                
+                // Very small delay between hop responses (batch sending simulation)
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            
+            // Wait for the interval before next round
+            time::sleep(Duration::from_millis(args.interval)).await;
         }
         
         Ok(())

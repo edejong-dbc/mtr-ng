@@ -1,4 +1,4 @@
-use crate::MtrSession;
+use crate::{MtrSession, HopStats, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -21,7 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::debug;
-use crate::{HopStats, Result};
+use tokio::sync::mpsc;
 
 
 pub fn render_ui(f: &mut Frame, session: &MtrSession) {
@@ -209,47 +209,6 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession) {
     f.render_widget(status, chunks[3]);
 }
 
-async fn run_single_trace_round(session_arc: &Arc<Mutex<MtrSession>>, round: usize) {
-    debug!("Round {}", round + 1);
-    
-    // Extract necessary values to avoid holding mutex across await - currently not used but kept for future enhancements
-    
-    // Create a temporary session for this trace round
-    let temp_session = {
-        let session = session_arc.lock().unwrap();
-        session.clone()
-    };
-    
-    // Run one round of the trace
-    let mut temp_session = temp_session;
-    // Modify count to just run one round
-    temp_session.args.count = 1;
-    
-    if let Ok(()) = temp_session.run_trace().await {
-        // Update the shared session with results
-        let mut session = session_arc.lock().unwrap();
-        for (i, hop) in temp_session.hops.into_iter().enumerate() {
-            if i < session.hops.len() {
-                // Update all hop data (don't condition on sent count since simulation works differently)
-                session.hops[i].sent = hop.sent;
-                session.hops[i].received = hop.received;
-                session.hops[i].rtts = hop.rtts;
-                session.hops[i].last_rtt = hop.last_rtt;
-                session.hops[i].avg_rtt = hop.avg_rtt;
-                session.hops[i].best_rtt = hop.best_rtt;
-                session.hops[i].worst_rtt = hop.worst_rtt;
-                session.hops[i].loss_percent = hop.loss_percent;
-                if hop.addr.is_some() {
-                    session.hops[i].addr = hop.addr;
-                }
-                if hop.hostname.is_some() {
-                    session.hops[i].hostname = hop.hostname;
-                }
-            }
-        }
-    }
-}
-
 pub async fn run_interactive(session: MtrSession) -> Result<()> {
     // Terminal setup
     enable_raw_mode()?;
@@ -259,45 +218,62 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Shared state for the UI and trace runner
-    let session = Arc::new(Mutex::new(session));
-    let session_clone = Arc::clone(&session);
+    let session_arc = Arc::new(Mutex::new(session.clone()));
+    let session_clone = Arc::clone(&session_arc);
+    
+    // Create update notification channel for real-time updates
+    let (update_tx, mut update_rx) = mpsc::unbounded_channel::<()>();
 
-    // Start the trace in a background task
-    let trace_handle = tokio::spawn(async move {
-        let count = session_clone.lock().unwrap().args.count;
-        let interval = session_clone.lock().unwrap().args.interval;
+    // Set up real-time callback on the shared session
+    {
+        let mut session_guard = session_arc.lock().unwrap();
+        let update_tx_for_callback = update_tx.clone();
+        session_guard.set_update_callback(Arc::new(move || {
+            let _ = update_tx_for_callback.send(());
+        }));
+    }
+
+    // Start the MTR algorithm in a background task with proper real-time updates
+    let trace_handle = {
+        let session_for_trace = Arc::clone(&session_clone);
         
-        // We need to run the trace in chunks to periodically update the shared state
-        for round in 0..count {
-            // Run trace round asynchronously
-            run_single_trace_round(&session_clone, round).await;
-            
-            // Sleep between rounds (cap at 500ms for better demo experience)
-            let sleep_time = std::cmp::min(interval, 500);
-            tokio::time::sleep(Duration::from_millis(sleep_time)).await;
-        }
-    });
+        tokio::spawn(async move {
+            // Run the real-time MTR algorithm that triggers UI updates on each ping response
+            if let Err(e) = MtrSession::run_trace_with_realtime_updates(session_for_trace).await {
+                debug!("Real-time trace failed: {}", e);
+            }
+        })
+    };
 
-    // Main UI loop
+    // Main UI loop with immediate updates
     let mut last_tick = Instant::now();
-    let tick_rate = Duration::from_millis(100); // More responsive updates
+    let tick_rate = Duration::from_millis(100); // Fallback refresh rate
 
     loop {
-        let session_guard = session.lock().unwrap();
-        terminal.draw(|f| render_ui(f, &session_guard))?;
-        drop(session_guard);
+        // Check for real-time update notifications or fallback timer
+        let should_update = update_rx.try_recv().is_ok() || last_tick.elapsed() >= tick_rate;
+        
+        if should_update {
+            // Create a snapshot of session data and release lock immediately
+            let session_snapshot = {
+                let session_guard = session_clone.lock().unwrap();
+                session_guard.clone()
+            }; // Lock released here!
+            
+            // Render using the snapshot (no lock held during UI rendering)
+            terminal.draw(|f| render_ui(f, &session_snapshot))?;
+            last_tick = Instant::now();
+        }
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
-
+        // Handle keyboard input with short timeout
+        let timeout = Duration::from_millis(10);
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('r') => {
                         // Reset statistics
-                        let mut session_guard = session.lock().unwrap();
+                        let mut session_guard = session_clone.lock().unwrap();
                         for hop in &mut session_guard.hops {
                             *hop = HopStats::new(hop.hop);
                         }
@@ -305,10 +281,6 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
                     _ => {}
                 }
             }
-        }
-
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
         }
     }
 
@@ -323,4 +295,8 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
-} 
+}
+
+
+
+ 
