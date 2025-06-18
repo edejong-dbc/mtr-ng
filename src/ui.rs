@@ -1,5 +1,6 @@
 use crate::{MtrSession, HopStats, Result};
 use crate::session::{NetworkEvent, RTTUpdate};
+use crate::SparklineScale;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -24,8 +25,66 @@ use std::{
 use tracing::debug;
 use tokio::sync::mpsc;
 
+#[derive(Debug, Clone)]
+pub struct UiState {
+    pub current_sparkline_scale: SparklineScale,
+}
 
-pub fn render_ui(f: &mut Frame, session: &MtrSession) {
+impl UiState {
+    pub fn new(scale: SparklineScale) -> Self {
+        Self {
+            current_sparkline_scale: scale,
+        }
+    }
+    
+    pub fn toggle_sparkline_scale(&mut self) {
+        self.current_sparkline_scale = match self.current_sparkline_scale {
+            SparklineScale::Linear => SparklineScale::Logarithmic,
+            SparklineScale::Logarithmic => SparklineScale::Linear,
+        };
+    }
+}
+
+fn generate_sparkline(sparkline_data: &[u64], global_max_rtt: u64, scale: SparklineScale) -> String {
+    if sparkline_data.is_empty() {
+        return "".to_string();
+    }
+    
+    sparkline_data
+        .iter()
+        .map(|&rtt| {
+            let ratio = match scale {
+                SparklineScale::Linear => {
+                    rtt as f64 / global_max_rtt as f64
+                }
+                SparklineScale::Logarithmic => {
+                    if rtt == 0 || global_max_rtt == 0 {
+                        0.0
+                    } else {
+                        // Logarithmic scaling: log(rtt + 1) / log(max_rtt + 1)
+                        // Adding 1 to avoid log(0)
+                        ((rtt + 1) as f64).ln() / ((global_max_rtt + 1) as f64).ln()
+                    }
+                }
+            };
+            
+            match (ratio * 8.0) as usize {
+                0 => ' ',
+                1 => '▁',
+                2 => '▂',
+                3 => '▃',
+                4 => '▄',
+                5 => '▅',
+                6 => '▆',
+                7 => '▇',
+                _ => '█',
+            }
+        })
+        .collect::<String>()
+}
+
+
+pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -102,27 +161,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession) {
                 .map(|d| (d.as_secs_f64() * 1000.0) as u64)
                 .collect();
             
-            let sparkline = if !sparkline_data.is_empty() {
-                sparkline_data
-                    .iter()
-                    .map(|&rtt| {
-                        let ratio = rtt as f64 / global_max_rtt as f64;
-                        match (ratio * 8.0) as usize {
-                            0 => ' ',
-                            1 => '▁',
-                            2 => '▂',
-                            3 => '▃',
-                            4 => '▄',
-                            5 => '▅',
-                            6 => '▆',
-                            7 => '▇',
-                            _ => '█',
-                        }
-                    })
-                    .collect::<String>()
-            } else {
-                "".to_string()
-            };
+            let sparkline = generate_sparkline(&sparkline_data, global_max_rtt, ui_state.current_sparkline_scale);
 
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{:2}.", hop.hop), Style::default().fg(Color::White)),
@@ -191,9 +230,14 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession) {
     
     let active_hops = session.hops.iter().filter(|h| h.sent > 0).count();
     
+    let scale_name = match ui_state.current_sparkline_scale {
+        SparklineScale::Linear => "Linear",
+        SparklineScale::Logarithmic => "Log",
+    };
+    
     let status_text = format!(
-        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Keys: 'q'=quit, 'r'=reset",
-        active_hops, total_sent, total_received, overall_loss
+        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} | Keys: 'q'=quit, 'r'=reset, 's'=scale",
+        active_hops, total_sent, total_received, overall_loss, scale_name
     );
     
     let status_color = if overall_loss > 50.0 {
@@ -221,6 +265,9 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     // Shared state for the UI and trace runner
     let session_arc = Arc::new(Mutex::new(session.clone()));
     let session_clone = Arc::clone(&session_arc);
+    
+    // Create UI state with initial sparkline scale from args
+    let mut ui_state = UiState::new(session.args.sparkline_scale);
     
     // Create update notification channel for real-time updates
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<()>();
@@ -262,7 +309,7 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
             }; // Lock released here!
             
             // Render using the snapshot (no lock held during UI rendering)
-            terminal.draw(|f| render_ui(f, &session_snapshot))?;
+            terminal.draw(|f| render_ui(f, &session_snapshot, &ui_state))?;
             last_tick = Instant::now();
         }
 
@@ -278,6 +325,10 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
                         for hop in &mut session_guard.hops {
                             *hop = HopStats::new(hop.hop);
                         }
+                    }
+                    KeyCode::Char('s') => {
+                        // Toggle sparkline scale
+                        ui_state.toggle_sparkline_scale();
                     }
                     _ => {}
                 }
@@ -306,6 +357,9 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Create UI state with initial sparkline scale from args
+    let mut ui_state = UiState::new(session.args.sparkline_scale);
 
     // Create channel for receiving network updates
     let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<NetworkEvent>();
@@ -356,7 +410,7 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
         // Render UI (no locks needed - we own the session state)
         let should_update = last_tick.elapsed() >= tick_rate;
         if should_update {
-            terminal.draw(|f| render_ui(f, &session))?;
+            terminal.draw(|f| render_ui(f, &session, &ui_state))?;
             last_tick = Instant::now();
         }
 
@@ -371,6 +425,10 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
                         for hop in &mut session.hops {
                             *hop = HopStats::new(hop.hop);
                         }
+                    }
+                    KeyCode::Char('s') => {
+                        // Toggle sparkline scale
+                        ui_state.toggle_sparkline_scale();
                     }
                     _ => {}
                 }

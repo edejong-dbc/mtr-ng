@@ -1,4 +1,10 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum SparklineScale {
+    Linear,
+    Logarithmic,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "mtr-ng")]
@@ -27,6 +33,10 @@ pub struct Args {
     /// Show IP addresses instead of hostnames
     #[arg(short, long)]
     pub numeric: bool,
+
+    /// Sparkline scaling mode: linear or logarithmic (default: logarithmic)
+    #[arg(long, value_enum, default_value = "logarithmic")]
+    pub sparkline_scale: SparklineScale,
 }
 
 #[cfg(test)]
@@ -42,6 +52,7 @@ mod tests {
         assert_eq!(args.max_hops, 30);
         assert!(!args.report);
         assert!(!args.numeric);
+        assert_eq!(args.sparkline_scale, SparklineScale::Logarithmic);
     }
 
     #[test]
@@ -62,6 +73,7 @@ mod tests {
         assert_eq!(args.max_hops, 50);
         assert!(args.report);
         assert!(args.numeric);
+        assert_eq!(args.sparkline_scale, SparklineScale::Logarithmic);
     }
 
     #[test]
@@ -82,5 +94,6 @@ mod tests {
         assert_eq!(args.max_hops, 25);
         assert!(args.report);
         assert!(args.numeric);
+        assert_eq!(args.sparkline_scale, SparklineScale::Logarithmic);
     }
 } 

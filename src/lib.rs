@@ -5,7 +5,7 @@ pub mod ui;
 pub mod report;
 
 // Re-export commonly used types
-pub use args::Args;
+pub use args::{Args, SparklineScale};
 pub use hop_stats::HopStats;
 pub use session::MtrSession;
 
