@@ -6,6 +6,106 @@ pub enum SparklineScale {
     Logarithmic,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum Column {
+    /// Hop number
+    Hop,
+    /// Hostname/IP address
+    Host,
+    /// Packet loss percentage
+    Loss,
+    /// Number of packets sent
+    Sent,
+    /// Last RTT measurement
+    Last,
+    /// Average RTT
+    Avg,
+    /// Exponential moving average RTT
+    Ema,
+    /// Last jitter value
+    Jitter,
+    /// Average jitter
+    JitterAvg,
+    /// Best (minimum) RTT
+    Best,
+    /// Worst (maximum) RTT
+    Worst,
+    /// RTT sparkline graph
+    Graph,
+}
+
+impl Column {
+    /// Get all available columns in default order
+    pub fn all() -> Vec<Column> {
+        vec![
+            Column::Hop,
+            Column::Host,
+            Column::Loss,
+            Column::Sent,
+            Column::Last,
+            Column::Avg,
+            Column::Ema,
+            Column::Jitter,
+            Column::JitterAvg,
+            Column::Best,
+            Column::Worst,
+            Column::Graph,
+        ]
+    }
+
+    /// Get default columns (excludes jitter by default for backwards compatibility)
+    pub fn default() -> Vec<Column> {
+        vec![
+            Column::Hop,
+            Column::Host,
+            Column::Loss,
+            Column::Sent,
+            Column::Last,
+            Column::Avg,
+            Column::Ema,
+            Column::Best,
+            Column::Worst,
+            Column::Graph,
+        ]
+    }
+
+    /// Get column header text
+    pub fn header(&self) -> &'static str {
+        match self {
+            Column::Hop => "",
+            Column::Host => "Host",
+            Column::Loss => "Loss%",
+            Column::Sent => "Snt",
+            Column::Last => "Last",
+            Column::Avg => "Avg",
+            Column::Ema => "EMA",
+            Column::Jitter => "Jttr",
+            Column::JitterAvg => "JAvg",
+            Column::Best => "Best",
+            Column::Worst => "Wrst",
+            Column::Graph => "RTT Graph",
+        }
+    }
+
+    /// Get column width for formatting
+    pub fn width(&self) -> usize {
+        match self {
+            Column::Hop => 3,
+            Column::Host => 21,
+            Column::Loss => 6,
+            Column::Sent => 4,
+            Column::Last => 8,
+            Column::Avg => 8,
+            Column::Ema => 8,
+            Column::Jitter => 8,
+            Column::JitterAvg => 8,
+            Column::Best => 8,
+            Column::Worst => 8,
+            Column::Graph => 20, // Minimum width for sparkline
+        }
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(name = "mtr-ng")]
 #[command(about = "A modern implementation of mtr (My Traceroute) with unicode and terminal graphics")]
@@ -37,6 +137,31 @@ pub struct Args {
     /// Sparkline scaling mode: linear or logarithmic (default: logarithmic)
     #[arg(long, value_enum, default_value = "logarithmic")]
     pub sparkline_scale: SparklineScale,
+
+    /// Exponential smoothing factor for EMA (0.0-1.0). Higher values = more responsive to recent changes
+    #[arg(long, default_value = "0.1")]
+    pub ema_alpha: f64,
+
+    /// Select which columns to display (default: hop,host,loss,sent,last,avg,ema,best,worst,graph)
+    #[arg(long, value_enum, value_delimiter = ',')]
+    pub fields: Option<Vec<Column>>,
+
+    /// Show all available columns including jitter metrics
+    #[arg(long)]
+    pub show_all: bool,
+}
+
+impl Args {
+    /// Get the columns to display based on command-line arguments
+    pub fn get_columns(&self) -> Vec<Column> {
+        if self.show_all {
+            Column::all()
+        } else if let Some(ref fields) = self.fields {
+            fields.clone()
+        } else {
+            Column::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -53,6 +178,9 @@ mod tests {
         assert!(!args.report);
         assert!(!args.numeric);
         assert_eq!(args.sparkline_scale, SparklineScale::Logarithmic);
+        assert_eq!(args.ema_alpha, 0.1);
+        assert!(args.fields.is_none());
+        assert!(!args.show_all);
     }
 
     #[test]
@@ -74,6 +202,9 @@ mod tests {
         assert!(args.report);
         assert!(args.numeric);
         assert_eq!(args.sparkline_scale, SparklineScale::Logarithmic);
+        assert_eq!(args.ema_alpha, 0.1);
+        assert!(args.fields.is_none());
+        assert!(!args.show_all);
     }
 
     #[test]
@@ -95,5 +226,8 @@ mod tests {
         assert!(args.report);
         assert!(args.numeric);
         assert_eq!(args.sparkline_scale, SparklineScale::Logarithmic);
+        assert_eq!(args.ema_alpha, 0.1);
+        assert!(args.fields.is_none());
+        assert!(!args.show_all);
     }
 } 

@@ -82,7 +82,12 @@ impl MtrSession {
                 .ok_or_else(|| anyhow!("Failed to resolve hostname"))?
         };
 
-        let hops = (1..=args.max_hops).map(HopStats::new).collect();
+        let mut hops: Vec<HopStats> = (1..=args.max_hops).map(HopStats::new).collect();
+        
+        // Configure EMA alpha for all hops from command line args
+        for hop in &mut hops {
+            hop.set_ema_alpha(args.ema_alpha);
+        }
         let packet_id = std::process::id() as u16;
 
         Ok(Self {
@@ -930,11 +935,15 @@ mod tests {
     async fn test_mtr_session_new_with_ip() {
         let args = Args {
             target: "192.168.1.1".to_string(),
-            count: 5,
+            count: Some(5),
             interval: 500,
             max_hops: 20,
             report: false,
             numeric: true,
+            sparkline_scale: crate::SparklineScale::Logarithmic,
+            ema_alpha: 0.1,
+            fields: None,
+            show_all: false,
         };
         
         let session = MtrSession::new(args).await;
@@ -944,7 +953,7 @@ mod tests {
         assert_eq!(session.target, "192.168.1.1");
         assert_eq!(session.target_addr.to_string(), "192.168.1.1");
         assert_eq!(session.hops.len(), 20);
-        assert_eq!(session.args.count, 5);
+        assert_eq!(session.args.count, Some(5));
         assert_eq!(session.args.interval, 500);
     }
 
@@ -952,11 +961,15 @@ mod tests {
     async fn test_mtr_session_new_with_localhost() {
         let args = Args {
             target: "localhost".to_string(),
-            count: 3,
+            count: Some(3),
             interval: 1000,
             max_hops: 15,
             report: true,
             numeric: false,
+            sparkline_scale: crate::SparklineScale::Logarithmic,
+            ema_alpha: 0.1,
+            fields: None,
+            show_all: false,
         };
         
         let session = MtrSession::new(args).await;
@@ -973,11 +986,15 @@ mod tests {
     fn test_mtr_session_clone() {
         let args = Args {
             target: "example.com".to_string(),
-            count: 10,
+            count: Some(10),
             interval: 1000,
             max_hops: 30,
             report: false,
             numeric: false,
+            sparkline_scale: crate::SparklineScale::Logarithmic,
+            ema_alpha: 0.1,
+            fields: None,
+            show_all: false,
         };
         
         // We can't easily test MtrSession::new in sync context due to async resolver,

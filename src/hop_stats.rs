@@ -18,9 +18,18 @@ pub struct HopStats {
     pub best_rtt: Option<Duration>,
     pub worst_rtt: Option<Duration>,
     pub avg_rtt: Option<Duration>,
+    pub ema_rtt: Option<Duration>, // Exponentially smoothed average RTT
+    pub jitter_avg: Option<Duration>, // Mean jitter (average of jitter values)
+    pub last_jitter: Option<Duration>, // Last calculated jitter value
+    pub jitters: VecDeque<Duration>, // Store jitter values for average calculation
     pub rtts: VecDeque<Duration>,
     pub packet_history: VecDeque<PacketOutcome>, // Chronological packet outcomes
     pub loss_percent: f64,
+    // Exponential smoothing factor (0.0 to 1.0)
+    // Higher values = more responsive to recent changes
+    // Lower values = more stable, less sensitive to spikes
+    // Typical values: 0.1-0.3 for network monitoring
+    pub ema_alpha: f64,
 }
 
 impl HopStats {
@@ -35,14 +44,47 @@ impl HopStats {
             best_rtt: None,
             worst_rtt: None,
             avg_rtt: None,
+            ema_rtt: None,
+            jitter_avg: None,
+            last_jitter: None,
+            jitters: VecDeque::with_capacity(100),
             rtts: VecDeque::with_capacity(100),
             packet_history: VecDeque::with_capacity(100),
             loss_percent: 0.0,
+            ema_alpha: 0.1,
         }
     }
 
     pub fn add_rtt(&mut self, rtt: Duration) {
         self.received += 1;
+        
+        // Calculate jitter BEFORE updating last_rtt (need previous value)
+        // Jitter = |current_rtt - previous_rtt|
+        if let Some(prev_rtt) = self.last_rtt {
+            let jitter = if rtt > prev_rtt {
+                rtt - prev_rtt
+            } else {
+                prev_rtt - rtt
+            };
+            
+            self.last_jitter = Some(jitter);
+            self.jitters.push_back(jitter);
+            
+            // Maintain capacity limit for jitter values
+            if self.jitters.len() > 100 {
+                self.jitters.pop_front();
+            }
+            
+            // Calculate mean jitter
+            let jitter_sum: Duration = self.jitters.iter().sum();
+            self.jitter_avg = Some(jitter_sum / self.jitters.len() as u32);
+            
+            tracing::debug!("Jitter: hop={}, current_jitter={:.1}ms, avg_jitter={:.1}ms", 
+                          self.hop, 
+                          jitter.as_secs_f64() * 1000.0,
+                          self.jitter_avg.unwrap().as_secs_f64() * 1000.0);
+        }
+        
         self.last_rtt = Some(rtt);
         self.rtts.push_back(rtt);
         
@@ -69,8 +111,27 @@ impl HopStats {
             self.worst_rtt = Some(rtt);
         }
 
+        // Calculate arithmetic average
         let sum: Duration = self.rtts.iter().sum();
         self.avg_rtt = Some(sum / self.rtts.len() as u32);
+        
+        // Calculate exponential moving average
+        // EMA = α * current_value + (1 - α) * previous_ema
+        // For first value, EMA = current_value
+        match self.ema_rtt {
+            None => {
+                // First RTT measurement - initialize EMA
+                self.ema_rtt = Some(rtt);
+            }
+            Some(prev_ema) => {
+                // Apply exponential smoothing formula
+                let rtt_ms = rtt.as_secs_f64() * 1000.0;
+                let prev_ema_ms = prev_ema.as_secs_f64() * 1000.0;
+                let new_ema_ms = self.ema_alpha * rtt_ms + (1.0 - self.ema_alpha) * prev_ema_ms;
+                self.ema_rtt = Some(Duration::from_secs_f64(new_ema_ms / 1000.0));
+            }
+        }
+
         
         self.update_loss_percent();
     }
@@ -110,6 +171,14 @@ impl HopStats {
         
         self.update_loss_percent();
     }
+    
+    /// Set the exponential smoothing factor (alpha)
+    /// Values closer to 1.0 make the average more responsive to recent changes
+    /// Values closer to 0.0 make the average more stable and less sensitive to spikes
+    /// Typical values for network monitoring: 0.1-0.3
+    pub fn set_ema_alpha(&mut self, alpha: f64) {
+        self.ema_alpha = alpha.clamp(0.0, 1.0);
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +198,9 @@ mod tests {
         assert!(hop.best_rtt.is_none());
         assert!(hop.worst_rtt.is_none());
         assert!(hop.avg_rtt.is_none());
+        assert!(hop.ema_rtt.is_none());
+        assert!(hop.jitter_avg.is_none());
+        assert!(hop.last_jitter.is_none());
         assert!(hop.rtts.is_empty());
     }
 
@@ -145,6 +217,9 @@ mod tests {
         assert_eq!(hop.best_rtt, Some(rtt1));
         assert_eq!(hop.worst_rtt, Some(rtt1));
         assert_eq!(hop.avg_rtt, Some(rtt1));
+        assert_eq!(hop.ema_rtt, Some(rtt1)); // First value initializes EMA
+        assert!(hop.jitter_avg.is_none()); // No jitter yet (need 2+ samples)
+        assert!(hop.last_jitter.is_none());
         assert_eq!(hop.rtts.len(), 1);
 
         // Add second RTT (better)
@@ -329,5 +404,71 @@ mod tests {
         
         // Average should be (50 + 100 + 75 + 200 + 25) / 5 = 90
         assert_eq!(hop.avg_rtt, Some(Duration::from_millis(90)));
+    }
+
+    #[test]
+    fn test_exponential_moving_average() {
+        let mut hop = HopStats::new(1);
+        hop.set_ema_alpha(0.5); // Use 0.5 for easier testing (50% weight to new values)
+        
+        // First RTT should initialize EMA
+        hop.add_rtt(Duration::from_millis(100));
+        assert_eq!(hop.ema_rtt, Some(Duration::from_millis(100)));
+        
+        // Second RTT: EMA = 0.5 * 200 + 0.5 * 100 = 150
+        hop.add_rtt(Duration::from_millis(200));
+        let ema_ms = (hop.ema_rtt.unwrap().as_secs_f64() * 1000.0).round() as u64;
+        assert_eq!(ema_ms, 150);
+        
+        // Third RTT: EMA = 0.5 * 100 + 0.5 * 150 = 125
+        hop.add_rtt(Duration::from_millis(100));
+        let ema_ms = (hop.ema_rtt.unwrap().as_secs_f64() * 1000.0).round() as u64;
+        assert_eq!(ema_ms, 125);
+    }
+
+    #[test]
+    fn test_ema_alpha_clamping() {
+        let mut hop = HopStats::new(1);
+        
+        // Test values outside valid range are clamped
+        hop.set_ema_alpha(-0.5);
+        assert_eq!(hop.ema_alpha, 0.0);
+        
+        hop.set_ema_alpha(1.5);
+        assert_eq!(hop.ema_alpha, 1.0);
+        
+        hop.set_ema_alpha(0.3);
+        assert_eq!(hop.ema_alpha, 0.3);
+    }
+
+    #[test]
+    fn test_jitter_calculation() {
+        let mut hop = HopStats::new(1);
+        
+        // First RTT - no jitter yet
+        hop.add_rtt(Duration::from_millis(100));
+        assert!(hop.jitter_avg.is_none());
+        assert!(hop.last_jitter.is_none());
+        
+        // Second RTT - first jitter calculation
+        hop.add_rtt(Duration::from_millis(120));
+        assert_eq!(hop.last_jitter, Some(Duration::from_millis(20))); // |120 - 100| = 20
+        assert_eq!(hop.jitter_avg, Some(Duration::from_millis(20))); // Only one jitter value
+        assert_eq!(hop.jitters.len(), 1);
+        
+        // Third RTT - jitter decreases
+        hop.add_rtt(Duration::from_millis(110));
+        assert_eq!(hop.last_jitter, Some(Duration::from_millis(10))); // |110 - 120| = 10
+        let expected_avg = (20 + 10) / 2; // Average of 20ms and 10ms = 15ms
+        assert_eq!(hop.jitter_avg, Some(Duration::from_millis(expected_avg)));
+        assert_eq!(hop.jitters.len(), 2);
+        
+        // Fourth RTT - larger jitter spike
+        hop.add_rtt(Duration::from_millis(150));
+        assert_eq!(hop.last_jitter, Some(Duration::from_millis(40))); // |150 - 110| = 40
+        // Average of jitter values: (20 + 10 + 40) / 3 = 23.333... ms
+        let expected_avg_ms = (hop.jitter_avg.unwrap().as_secs_f64() * 1000.0).round() as u64;
+        assert_eq!(expected_avg_ms, 23); // Rounded to nearest ms
+        assert_eq!(hop.jitters.len(), 3);
     }
 } 

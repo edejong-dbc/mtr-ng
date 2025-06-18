@@ -1,6 +1,7 @@
 use crate::{MtrSession, HopStats, Result};
 use crate::session::{NetworkEvent, RTTUpdate};
 use crate::SparklineScale;
+use crate::args::Column;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -29,6 +30,8 @@ use tokio::sync::mpsc;
 pub struct UiState {
     pub current_sparkline_scale: SparklineScale,
     pub color_support: ColorSupport,
+    pub columns: Vec<Column>,
+    pub current_column_index: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -40,10 +43,12 @@ pub enum ColorSupport {
 }
 
 impl UiState {
-    pub fn new(scale: SparklineScale) -> Self {
+    pub fn new(scale: SparklineScale, columns: Vec<Column>) -> Self {
         Self {
             current_sparkline_scale: scale,
             color_support: detect_color_support(),
+            columns,
+            current_column_index: 0,
         }
     }
     
@@ -61,6 +66,60 @@ impl UiState {
             ColorSupport::Extended => ColorSupport::TrueColor,
             ColorSupport::TrueColor => ColorSupport::None,
         };
+    }
+    
+    pub fn toggle_column(&mut self) {
+        if !self.columns.is_empty() {
+            self.current_column_index = (self.current_column_index + 1) % self.columns.len();
+            
+            // Remove the current column and cycle to next available
+            let all_columns = Column::all();
+            let removed_column = self.columns.remove(self.current_column_index);
+            
+            // Find next column not currently displayed
+            for col in &all_columns {
+                if !self.columns.contains(col) && *col != removed_column {
+                    self.columns.insert(self.current_column_index, *col);
+                    break;
+                }
+            }
+            
+            // Reset index if it's out of bounds
+            if self.current_column_index >= self.columns.len() {
+                self.current_column_index = 0;
+            }
+        }
+    }
+    
+    pub fn add_column(&mut self, column: Column) {
+        if !self.columns.contains(&column) {
+            self.columns.push(column);
+        }
+    }
+    
+    pub fn remove_column(&mut self, column: Column) {
+        if let Some(pos) = self.columns.iter().position(|&c| c == column) {
+            self.columns.remove(pos);
+            if self.current_column_index >= self.columns.len() && self.current_column_index > 0 {
+                self.current_column_index = self.columns.len() - 1;
+            }
+        }
+    }
+    
+    pub fn get_header(&self) -> String {
+        let mut header = String::from("  ");
+        for (i, column) in self.columns.iter().enumerate() {
+            if i > 0 && *column != Column::Graph {
+                header.push(' ');
+            }
+            match column {
+                Column::Hop => {}, // No header for hop number column
+                Column::Host => header.push_str(&format!("{:21}", column.header())),
+                Column::Graph => header.push_str(column.header()),
+                _ => header.push_str(&format!("{:>8}", column.header())),
+            }
+        }
+        header
     }
 }
 
@@ -136,7 +195,7 @@ fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale:
 fn get_rtt_char_and_color(ratio: f64, color_support: ColorSupport) -> (char, Color) {
     let level = (ratio * 8.0) as usize;
     let char = match level {
-        0 => ' ',
+        0 => '▁', // Always show at least minimal bar instead of space
         1 => '▁',
         2 => '▂', 
         3 => '▃',
@@ -214,6 +273,89 @@ fn get_pending_packet_color(color_support: ColorSupport) -> Color {
     }
 }
 
+fn generate_row_spans(hop: &crate::HopStats, hostname: &str, loss_color: Color, sparkline_spans: &[Span<'static>], columns: &[Column]) -> Vec<Span<'static>> {
+    let mut row_spans = Vec::new();
+    
+    for column in columns {
+        match column {
+            Column::Hop => {
+                row_spans.push(Span::styled(format!("{:2}.", hop.hop), Style::default().fg(Color::White)));
+            }
+            Column::Host => {
+                row_spans.push(Span::styled(format!("{:21}", hostname), Style::default().fg(Color::Cyan)));
+            }
+            Column::Loss => {
+                row_spans.push(Span::styled(format!("{:6.1}%", hop.loss_percent), Style::default().fg(loss_color)));
+            }
+            Column::Sent => {
+                row_spans.push(Span::styled(format!("{:4}", hop.sent), Style::default().fg(Color::Gray)));
+            }
+            Column::Last => {
+                let value = if let Some(rtt) = hop.last_rtt {
+                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
+            }
+            Column::Avg => {
+                let value = if let Some(rtt) = hop.avg_rtt {
+                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
+            }
+            Column::Ema => {
+                let value = if let Some(rtt) = hop.ema_rtt {
+                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
+            }
+            Column::Jitter => {
+                let value = if let Some(jitter) = hop.last_jitter {
+                    format!("{:6.1}ms", jitter.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Magenta)));
+            }
+            Column::JitterAvg => {
+                let value = if let Some(jitter) = hop.jitter_avg {
+                    format!("{:6.1}ms", jitter.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Magenta)));
+            }
+            Column::Best => {
+                let value = if let Some(rtt) = hop.best_rtt {
+                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Green)));
+            }
+            Column::Worst => {
+                let value = if let Some(rtt) = hop.worst_rtt {
+                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                } else {
+                    "   ???ms".to_string()
+                };
+                row_spans.push(Span::styled(value, Style::default().fg(Color::Red)));
+            }
+            Column::Graph => {
+                row_spans.push(Span::styled(" ".to_string(), Style::default())); // Space before sparkline
+                row_spans.extend(sparkline_spans.iter().cloned());
+            }
+        }
+    }
+    
+    row_spans
+}
+
 
 
 
@@ -276,33 +418,13 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 hostname
             };
 
-            let rtt_text = if let Some(_last) = hop.last_rtt {
-                format!(
-                    "{:6.1}ms {:6.1}ms {:6.1}ms {:6.1}ms",
-                    hop.last_rtt.unwrap_or_default().as_secs_f64() * 1000.0,
-                    hop.avg_rtt.unwrap_or_default().as_secs_f64() * 1000.0,
-                    hop.best_rtt.unwrap_or_default().as_secs_f64() * 1000.0,
-                    hop.worst_rtt.unwrap_or_default().as_secs_f64() * 1000.0,
-                )
-            } else {
-                "   ???ms    ???ms    ???ms    ???ms".to_string()
-            };
+
 
             // Generate colored sparkline for RTT history including lost packets
             let sparkline_spans = generate_colored_sparkline(hop, global_max_rtt, ui_state.current_sparkline_scale, ui_state.color_support);
 
-            // Create the row with proper spacing
-            let mut row_spans = vec![
-                Span::styled(format!("{:2}.", hop.hop), Style::default().fg(Color::White)),
-                Span::styled(format!("{:21}", hostname), Style::default().fg(Color::Cyan)),
-                Span::styled(format!("{:6.1}%", hop.loss_percent), Style::default().fg(loss_color)),
-                Span::styled(format!("{:4}", hop.sent), Style::default().fg(Color::Gray)),
-                Span::styled(rtt_text, Style::default().fg(Color::Yellow)),
-                Span::styled(" ".to_string(), Style::default()), // Space before sparkline
-            ];
-            
-            // Add the colored sparkline spans
-            row_spans.extend(sparkline_spans);
+            // Generate row data based on selected columns
+            let row_spans = generate_row_spans(hop, &hostname, loss_color, &sparkline_spans, &ui_state.columns);
 
             ListItem::new(Line::from(row_spans))
         })
@@ -312,7 +434,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("  Host                   Loss%  Snt  Last    Avg   Best  Wrst  RTT Graph")
+                .title(ui_state.get_header())
         );
     f.render_widget(list, chunks[1]);
 
@@ -377,7 +499,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     };
     
     let status_text = format!(
-        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} | Colors: {} | Keys: 'q'=quit, 'r'=reset, 's'=scale, 'c'=colors",
+        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} | Colors: {} | Keys: 'q'=quit, 'r'=reset, 's'=scale, 'c'=colors, 'f'=fields",
         active_hops, total_sent, total_received, overall_loss, scale_name, color_name
     );
     
@@ -407,8 +529,8 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     let session_arc = Arc::new(Mutex::new(session.clone()));
     let session_clone = Arc::clone(&session_arc);
     
-    // Create UI state with initial sparkline scale from args
-    let mut ui_state = UiState::new(session.args.sparkline_scale);
+    // Create UI state with initial sparkline scale and columns from args
+    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns());
     
     // Create update notification channel for real-time updates
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<()>();
@@ -475,6 +597,10 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
                         // Cycle color mode
                         ui_state.cycle_color_mode();
                     }
+                    KeyCode::Char('f') => {
+                        // Toggle column visibility
+                        ui_state.toggle_column();
+                    }
                     _ => {}
                 }
             }
@@ -503,8 +629,8 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create UI state with initial sparkline scale from args
-    let mut ui_state = UiState::new(session.args.sparkline_scale);
+    // Create UI state with initial sparkline scale and columns from args
+    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns());
 
     // Create channel for receiving network updates
     let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<NetworkEvent>();
