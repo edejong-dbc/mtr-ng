@@ -158,6 +158,7 @@ fn detect_color_support() -> ColorSupport {
 
 fn generate_colored_sparkline(
     hop: &crate::HopStats,
+    global_min_rtt: u64,
     global_max_rtt: u64,
     scale: SparklineScale,
     color_support: ColorSupport,
@@ -193,11 +194,14 @@ fn generate_colored_sparkline(
                     let ratio = match scale {
                         SparklineScale::Linear => rtt_ms as f64 / global_max_rtt as f64,
                         SparklineScale::Logarithmic => {
-                            if rtt_ms == 0 || global_max_rtt == 0 {
+                            if rtt_ms == 0 || global_max_rtt == 0 || global_min_rtt == global_max_rtt {
                                 0.0
                             } else {
-                                // Logarithmic scaling: log(rtt + 1) / log(max_rtt + 1)
-                                ((rtt_ms + 1) as f64).ln() / ((global_max_rtt + 1) as f64).ln()
+                                // Logarithmic scaling: (log10(rtt + 1) - log10(min + 1)) / (log10(max + 1) - log10(min + 1))
+                                let log_rtt = ((rtt_ms + 1) as f64).log10();
+                                let log_min = ((global_min_rtt + 1) as f64).log10();
+                                let log_max = ((global_max_rtt + 1) as f64).log10();
+                                (log_rtt - log_min) / (log_max - log_min)
                             }
                         }
                     };
@@ -456,15 +460,17 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     );
     f.render_widget(header, chunks[0]);
 
-    // Calculate global max RTT for sparkline scaling across all hops
-    let global_max_rtt = session
+    // Calculate global min and max RTT for sparkline scaling across all hops
+    let rtt_values: Vec<u64> = session
         .hops
         .iter()
         .filter(|hop| hop.sent > 0)
         .flat_map(|hop| hop.rtts.iter())
         .map(|d| (d.as_secs_f64() * 1000.0) as u64)
-        .max()
-        .unwrap_or(1);
+        .collect();
+    
+    let global_max_rtt = rtt_values.iter().max().copied().unwrap_or(1);
+    let global_min_rtt = rtt_values.iter().min().copied().unwrap_or(1);
 
     // Main statistics table with right-aligned numeric headers
     let header_cells = ui_state.columns.iter().map(|col| {
@@ -531,6 +537,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
             // Generate colored sparkline for RTT history including lost packets
             let sparkline_spans = generate_colored_sparkline(
                 hop,
+                global_min_rtt,
                 global_max_rtt,
                 ui_state.current_sparkline_scale,
                 ui_state.color_support,
