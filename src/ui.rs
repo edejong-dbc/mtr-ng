@@ -45,6 +45,71 @@ impl UiState {
     }
 }
 
+#[derive(Debug, Clone)]
+enum PacketResult {
+    Received(u64), // RTT in milliseconds
+    Lost,          // Packet was sent but no response received
+}
+
+fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale) -> String {
+    if hop.sent == 0 {
+        return "".to_string();
+    }
+
+    // Create a vector representing all sent packets
+    let mut packet_results = Vec::new();
+    
+    // Add received packets (we have RTTs for these)
+    for rtt in &hop.rtts {
+        packet_results.push(PacketResult::Received((rtt.as_secs_f64() * 1000.0) as u64));
+    }
+    
+    // Add lost packets (sent - received)
+    let lost_count = hop.sent - hop.received;
+    for _ in 0..lost_count {
+        packet_results.push(PacketResult::Lost);
+    }
+    
+    // Note: This is a simplified approach. In reality, we'd need to track the order
+    // of sent vs received packets, but for now this gives a good visual indication
+    
+    packet_results
+        .iter()
+        .map(|packet| {
+            match packet {
+                PacketResult::Received(rtt) => {
+                    let ratio = match scale {
+                        SparklineScale::Linear => {
+                            *rtt as f64 / global_max_rtt as f64
+                        }
+                        SparklineScale::Logarithmic => {
+                            if *rtt == 0 || global_max_rtt == 0 {
+                                0.0
+                            } else {
+                                // Logarithmic scaling: log(rtt + 1) / log(max_rtt + 1)
+                                ((*rtt + 1) as f64).ln() / ((global_max_rtt + 1) as f64).ln()
+                            }
+                        }
+                    };
+                    
+                    match (ratio * 8.0) as usize {
+                        0 => ' ',
+                        1 => '▁',
+                        2 => '▂',
+                        3 => '▃',
+                        4 => '▄',
+                        5 => '▅',
+                        6 => '▆',
+                        7 => '▇',
+                        _ => '█',
+                    }
+                }
+                PacketResult::Lost => '·', // Middle dot for lost packets
+            }
+        })
+        .collect::<String>()
+}
+
 fn generate_sparkline(sparkline_data: &[u64], global_max_rtt: u64, scale: SparklineScale) -> String {
     if sparkline_data.is_empty() {
         return "".to_string();
@@ -155,13 +220,8 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 "   ???ms    ???ms    ???ms    ???ms".to_string()
             };
 
-            // Unicode sparkline for RTT history
-            let sparkline_data: Vec<u64> = hop.rtts
-                .iter()
-                .map(|d| (d.as_secs_f64() * 1000.0) as u64)
-                .collect();
-            
-            let sparkline = generate_sparkline(&sparkline_data, global_max_rtt, ui_state.current_sparkline_scale);
+            // Unicode sparkline for RTT history including lost packets
+            let sparkline = generate_sparkline_with_losses(hop, global_max_rtt, ui_state.current_sparkline_scale);
 
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{:2}.", hop.hop), Style::default().fg(Color::White)),
@@ -236,7 +296,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     };
     
     let status_text = format!(
-        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} | Keys: 'q'=quit, 'r'=reset, 's'=scale",
+        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} (·=lost) | Keys: 'q'=quit, 'r'=reset, 's'=scale",
         active_hops, total_sent, total_received, overall_loss, scale_name
     );
     
