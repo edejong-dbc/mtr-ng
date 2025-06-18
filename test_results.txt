@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (target/debug/deps/mtr_ng-343a38afdccbd9b4)
+
+running 16 tests
+test hop_stats::tests::test_hop_stats_loss_calculation ... ok
+test hop_stats::tests::test_hop_stats_increment_sent ... ok
+test hop_stats::tests::test_hop_stats_add_rtt ... ok
+test hop_stats::tests::test_hop_stats_add_timeout ... ok
+test hop_stats::tests::test_hop_stats_new ... ok
+test hop_stats::tests::test_hop_stats_clone ... ok
+test hop_stats::tests::test_hop_stats_update_loss_percent_edge_cases ... ok
+test hop_stats::tests::test_large_rtt_values ... ok
+test hop_stats::tests::test_rtt_statistics_accuracy ... ok
+test session::tests::test_mtr_session_clone ... ok
+test hop_stats::tests::test_hop_stats_rtts_capacity_limit ... ok
+test args::tests::test_args_default_values ... ok
+test args::tests::test_args_short_flags ... ok
+test args::tests::test_args_custom_values ... ok
+test session::tests::test_mtr_session_new_with_ip ... ok
+test session::tests::test_mtr_session_new_with_localhost ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/mtr_ng-2f5364f21984ae34)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mtr_ng
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

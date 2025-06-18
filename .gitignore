@@ -1,0 +1,17 @@
+# Build artifacts
+/target/
+Cargo.lock
+
+# Log files  
+mtr-ng.log
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

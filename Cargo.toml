@@ -1,0 +1,53 @@
+[package]
+name = "mtr-ng"
+version = "0.1.0"
+edition = "2021"
+description = "A modern implementation of mtr (My Traceroute) with unicode and terminal graphics"
+license = "MIT OR Apache-2.0"
+authors = ["Your Name <your.email@example.com>"]
+repository = "https://github.com/yourusername/mtr-ng"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Command line argument parsing
+clap = { version = "4.4", features = ["derive"] }
+
+# Async runtime and networking
+tokio = { version = "1.0", features = ["full"] }
+tokio-util = "0.7"
+
+# Network operations
+socket2 = "0.5"
+pnet = "0.34"
+
+# Terminal UI and graphics
+crossterm = "0.27"
+ratatui = "0.24"
+unicode-width = "0.1"
+
+# Data structures and utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Random number generation
+rand = "0.8"
+
+# Raw socket operations
+libc = "0.2"
+
+# DNS resolution
+trust-dns-resolver = "0.23"
+
+[dev-dependencies]
+tokio-test = "0.4"
