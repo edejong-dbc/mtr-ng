@@ -8,9 +8,9 @@ pub struct Args {
     /// Target hostname or IP address
     pub target: String,
 
-    /// Number of pings per round
-    #[arg(short, long, default_value = "10")]
-    pub count: usize,
+    /// Number of pings per round (default: infinite)
+    #[arg(short, long)]
+    pub count: Option<usize>,
 
     /// Wait time between pings in milliseconds
     #[arg(short, long, default_value = "1000")]
@@ -37,7 +37,7 @@ mod tests {
     fn test_args_default_values() {
         let args = Args::try_parse_from(&["mtr-ng", "example.com"]).unwrap();
         assert_eq!(args.target, "example.com");
-        assert_eq!(args.count, 10);
+        assert_eq!(args.count, None); // Default is now infinite (None)
         assert_eq!(args.interval, 1000);
         assert_eq!(args.max_hops, 30);
         assert!(!args.report);
@@ -57,7 +57,7 @@ mod tests {
         ]).unwrap();
         
         assert_eq!(args.target, "google.com");
-        assert_eq!(args.count, 20);
+        assert_eq!(args.count, Some(20));
         assert_eq!(args.interval, 500);
         assert_eq!(args.max_hops, 50);
         assert!(args.report);
@@ -77,7 +77,7 @@ mod tests {
         ]).unwrap();
         
         assert_eq!(args.target, "test.example.com");
-        assert_eq!(args.count, 15);
+        assert_eq!(args.count, Some(15));
         assert_eq!(args.interval, 2000);
         assert_eq!(args.max_hops, 25);
         assert!(args.report);

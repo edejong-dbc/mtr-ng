@@ -147,7 +147,12 @@ impl MtrSession {
     async fn run_mtr_algorithm(&mut self, target: Ipv4Addr, send_socket: Socket, recv_socket: Socket) -> Result<()> {
         let mut round = 0;
         
-        while round < self.args.count {
+        loop {
+            if let Some(count) = self.args.count {
+                if round >= count {
+                    break;
+                }
+            }
             // Send batch (one packet per active hop, like original mtr)
             let restart = self.net_send_batch(target, &send_socket).await?;
             
@@ -162,7 +167,11 @@ impl MtrSession {
             
             if restart {
                 round += 1;
-                debug!("Completed round {}/{}, restarting batch", round, self.args.count);
+                if let Some(count) = self.args.count {
+                    debug!("Completed round {}/{}, restarting batch", round, count);
+                } else {
+                    debug!("Completed round {} (continuous), restarting batch", round);
+                }
             }
         }
         
@@ -505,7 +514,7 @@ impl MtrSession {
     async fn run_simulated_trace(&mut self) -> Result<()> {
         info!("Running simulated traceroute (use sudo for real network tracing)");
         
-        for round in 0..self.args.count {
+        for round in 0..self.args.count.unwrap_or(10) {
             debug!("Simulation Round {}", round + 1);
             
             for hop in &mut self.hops {
@@ -607,8 +616,16 @@ impl MtrSession {
         recv_socket: Socket,
         args: Args
     ) -> Result<()> {
-        for round in 0..args.count {
-            debug!("MTR Round {}/{}", round + 1, args.count);
+        let mut round = 0;
+        loop {
+            if let Some(count) = args.count {
+                if round >= count {
+                    break;
+                }
+                debug!("MTR Round {}/{}", round + 1, count);
+            } else {
+                debug!("MTR Round {} (continuous)", round + 1);
+            }
             
             let round_start = Instant::now();
             let round_duration = Duration::from_millis(args.interval);
@@ -634,7 +651,12 @@ impl MtrSession {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
             
-            debug!("Completed round {}/{}", round + 1, args.count);
+            if let Some(count) = args.count {
+                debug!("Completed round {}/{}", round + 1, count);
+            } else {
+                debug!("Completed round {} (continuous)", round + 1);
+            }
+            round += 1;
         }
         
         Ok(())
@@ -808,7 +830,7 @@ impl MtrSession {
         async fn run_simulated_trace_realtime(session_arc: std::sync::Arc<std::sync::Mutex<Self>>, args: Args) -> Result<()> {
         info!("Running simulated traceroute (use sudo for real network tracing)");
         
-        for round in 0..args.count {
+        for round in 0..args.count.unwrap_or(10) {
             debug!("Simulation Round {}", round + 1);
             
             // Get callback and config
