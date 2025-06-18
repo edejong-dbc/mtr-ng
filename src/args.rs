@@ -92,7 +92,7 @@ impl Column {
         match self {
             Column::Hop => 3,
             Column::Host => 21,
-            Column::Loss => 6,
+            Column::Loss => 7,
             Column::Sent => 4,
             Column::Last => 8,
             Column::Avg => 8,

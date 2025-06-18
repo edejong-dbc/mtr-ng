@@ -327,9 +327,9 @@ fn generate_table_cells(
             }
             Column::Loss => {
                 let loss_text = if hop.sent > 0 {
-                    format!("{:4.1}%", hop.loss_percent)
+                    format!("{:5.1}%", hop.loss_percent)
                 } else {
-                    "  -".to_string()
+                    "    -".to_string()
                 };
                 cells.push(Cell::from(loss_text).style(Style::default().fg(loss_color)));
             }
@@ -414,7 +414,7 @@ fn generate_column_constraints(columns: &[Column]) -> Vec<Constraint> {
         match column {
             Column::Hop => Constraint::Length(3),     // "XX."
             Column::Host => Constraint::Min(15),      // Host names
-            Column::Loss => Constraint::Length(7),    // "XX.X%"
+            Column::Loss => Constraint::Length(7),    // "100.0%"
             Column::Sent => Constraint::Length(4),    // Number
             Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => {
                 Constraint::Length(9) // "XXX.Xms"
