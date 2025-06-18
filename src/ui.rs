@@ -28,12 +28,22 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub current_sparkline_scale: SparklineScale,
+    pub color_support: ColorSupport,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ColorSupport {
+    None,      // No color support
+    Basic,     // 16 colors
+    Extended,  // 256 colors
+    TrueColor, // 24-bit RGB
 }
 
 impl UiState {
     pub fn new(scale: SparklineScale) -> Self {
         Self {
             current_sparkline_scale: scale,
+            color_support: detect_color_support(),
         }
     }
     
@@ -43,17 +53,48 @@ impl UiState {
             SparklineScale::Logarithmic => SparklineScale::Linear,
         };
     }
+    
+    pub fn cycle_color_mode(&mut self) {
+        self.color_support = match self.color_support {
+            ColorSupport::None => ColorSupport::Basic,
+            ColorSupport::Basic => ColorSupport::Extended,
+            ColorSupport::Extended => ColorSupport::TrueColor,
+            ColorSupport::TrueColor => ColorSupport::None,
+        };
+    }
+}
+
+fn detect_color_support() -> ColorSupport {
+    // Check environment variables for color support
+    if let Ok(colorterm) = std::env::var("COLORTERM") {
+        if colorterm.contains("truecolor") || colorterm.contains("24bit") {
+            tracing::debug!("Detected TrueColor support from COLORTERM={}", colorterm);
+            return ColorSupport::TrueColor;
+        }
+    }
+    
+    if let Ok(term) = std::env::var("TERM") {
+        if term.contains("256") || term.contains("256color") {
+            tracing::debug!("Detected 256 color support from TERM={}", term);
+            return ColorSupport::Extended;
+        }
+        if term.contains("color") || term == "xterm" || term.starts_with("screen") {
+            tracing::debug!("Detected basic color support from TERM={}", term);
+            return ColorSupport::Basic;
+        }
+    }
+    
+    // Default to basic color support for interactive terminals
+    tracing::debug!("Using default basic color support");
+    ColorSupport::Basic
 }
 
 
 
-fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale) -> String {
-
+fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale, color_support: ColorSupport) -> Vec<Span<'static>> {
     if hop.sent == 0 {
-        return "".to_string();
+        return vec![];
     }
-
-
 
     // Use the chronological packet history from HopStats
     hop.packet_history
@@ -76,23 +117,101 @@ fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, sc
                         }
                     };
                     
-                    match (ratio * 8.0) as usize {
-                        0 => ' ',
-                        1 => '▁',
-                        2 => '▂',
-                        3 => '▃',
-                        4 => '▄',
-                        5 => '▅',
-                        6 => '▆',
-                        7 => '▇',
-                        _ => '█',
-                    }
+                    let (char, color) = get_rtt_char_and_color(ratio, color_support);
+                    Span::styled(char.to_string(), Style::default().fg(color))
                 }
-                crate::hop_stats::PacketOutcome::Lost => '·', // Middle dot for lost packets
-                crate::hop_stats::PacketOutcome::Pending => '?', // Question mark for pending packets
+                crate::hop_stats::PacketOutcome::Lost => {
+                    let color = get_lost_packet_color(color_support);
+                    Span::styled("·".to_string(), Style::default().fg(color))
+                }
+                crate::hop_stats::PacketOutcome::Pending => {
+                    let color = get_pending_packet_color(color_support);
+                    Span::styled("?".to_string(), Style::default().fg(color))
+                }
             }
         })
-        .collect::<String>()
+        .collect()
+}
+
+fn get_rtt_char_and_color(ratio: f64, color_support: ColorSupport) -> (char, Color) {
+    let level = (ratio * 8.0) as usize;
+    let char = match level {
+        0 => ' ',
+        1 => '▁',
+        2 => '▂', 
+        3 => '▃',
+        4 => '▄',
+        5 => '▅',
+        6 => '▆',
+        7 => '▇',
+        _ => '█',
+    };
+    
+    // Colorblind-friendly color scheme based on RTT level
+    let color = match color_support {
+        ColorSupport::None => Color::White,
+        ColorSupport::Basic => {
+            // Use basic 16 colors - green to red spectrum that works for colorblind users
+            match level {
+                0..=1 => Color::Green,      // Fast - green
+                2..=3 => Color::Cyan,       // Good - cyan 
+                4..=5 => Color::Yellow,     // Medium - yellow
+                6..=7 => Color::Magenta,    // Slow - magenta
+                _ => Color::Red,            // Very slow - red
+            }
+        }
+        ColorSupport::Extended => {
+            // Use 256-color palette for smoother gradation
+            // Using colorblind-friendly blues to oranges/reds
+            match level {
+                0 => Color::Indexed(22),    // Dark green
+                1 => Color::Indexed(28),    // Green
+                2 => Color::Indexed(34),    // Light green  
+                3 => Color::Indexed(40),    // Green-cyan
+                4 => Color::Indexed(220),   // Yellow
+                5 => Color::Indexed(214),   // Orange
+                6 => Color::Indexed(208),   // Dark orange
+                7 => Color::Indexed(196),   // Red
+                _ => Color::Indexed(160),   // Dark red
+            }
+        }
+        ColorSupport::TrueColor => {
+            // Use RGB colors for finest gradation - colorblind safe palette
+            match level {
+                0 => Color::Rgb(0, 100, 0),      // Dark green
+                1 => Color::Rgb(0, 150, 0),      // Green
+                2 => Color::Rgb(100, 200, 0),    // Yellow-green
+                3 => Color::Rgb(200, 200, 0),    // Yellow
+                4 => Color::Rgb(255, 150, 0),    // Orange
+                5 => Color::Rgb(255, 100, 0),    // Dark orange
+                6 => Color::Rgb(255, 50, 0),     // Red-orange
+                7 => Color::Rgb(200, 0, 0),      // Red
+                _ => Color::Rgb(150, 0, 0),      // Dark red
+            }
+        }
+    };
+    
+    (char, color)
+}
+
+fn get_lost_packet_color(color_support: ColorSupport) -> Color {
+    // Use a distinct color for lost packets that's visible to colorblind users
+    match color_support {
+        ColorSupport::None => Color::White,
+        ColorSupport::Basic => Color::Red,
+        ColorSupport::Extended => Color::Indexed(196), // Bright red
+        ColorSupport::TrueColor => Color::Rgb(255, 0, 0), // Pure red
+    }
+}
+
+fn get_pending_packet_color(color_support: ColorSupport) -> Color {
+    // Use blue/purple for pending packets - distinct from RTT colors
+    match color_support {
+        ColorSupport::None => Color::White,
+        ColorSupport::Basic => Color::Blue,
+        ColorSupport::Extended => Color::Indexed(27), // Blue
+        ColorSupport::TrueColor => Color::Rgb(100, 100, 255), // Light blue
+    }
 }
 
 
@@ -169,17 +288,23 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 "   ???ms    ???ms    ???ms    ???ms".to_string()
             };
 
-            // Unicode sparkline for RTT history including lost packets
-            let sparkline = generate_sparkline_with_losses(hop, global_max_rtt, ui_state.current_sparkline_scale);
+            // Generate colored sparkline for RTT history including lost packets
+            let sparkline_spans = generate_colored_sparkline(hop, global_max_rtt, ui_state.current_sparkline_scale, ui_state.color_support);
 
-            ListItem::new(Line::from(vec![
+            // Create the row with proper spacing
+            let mut row_spans = vec![
                 Span::styled(format!("{:2}.", hop.hop), Style::default().fg(Color::White)),
                 Span::styled(format!("{:21}", hostname), Style::default().fg(Color::Cyan)),
                 Span::styled(format!("{:6.1}%", hop.loss_percent), Style::default().fg(loss_color)),
                 Span::styled(format!("{:4}", hop.sent), Style::default().fg(Color::Gray)),
                 Span::styled(rtt_text, Style::default().fg(Color::Yellow)),
-                Span::styled(format!(" {}", sparkline), Style::default().fg(Color::Magenta)),
-            ]))
+                Span::styled(" ".to_string(), Style::default()), // Space before sparkline
+            ];
+            
+            // Add the colored sparkline spans
+            row_spans.extend(sparkline_spans);
+
+            ListItem::new(Line::from(row_spans))
         })
         .collect();
 
@@ -244,9 +369,16 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         SparklineScale::Logarithmic => "Log",
     };
     
+    let color_name = match ui_state.color_support {
+        ColorSupport::None => "No Color",
+        ColorSupport::Basic => "16 Colors",
+        ColorSupport::Extended => "256 Colors", 
+        ColorSupport::TrueColor => "RGB Colors",
+    };
+    
     let status_text = format!(
-        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} (·=lost ?=pending) | Keys: 'q'=quit, 'r'=reset, 's'=scale",
-        active_hops, total_sent, total_received, overall_loss, scale_name
+        "Active Hops: {} | Total Sent: {} | Total Received: {} | Overall Loss: {:.1}% | Sparkline: {} | Colors: {} | Keys: 'q'=quit, 'r'=reset, 's'=scale, 'c'=colors",
+        active_hops, total_sent, total_received, overall_loss, scale_name, color_name
     );
     
     let status_color = if overall_loss > 50.0 {
@@ -338,6 +470,10 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
                     KeyCode::Char('s') => {
                         // Toggle sparkline scale
                         ui_state.toggle_sparkline_scale();
+                    }
+                    KeyCode::Char('c') => {
+                        // Cycle color mode
+                        ui_state.cycle_color_mode();
                     }
                     _ => {}
                 }
