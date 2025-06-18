@@ -468,31 +468,60 @@ fn generate_scale_visualization(
         scale_spans.push(Span::styled(char.to_string(), Style::default().fg(color)));
     }
     
-    // Create the scale text with range information
-    let min_label = format!("{}ms", global_min_rtt);
-    let max_label = format!("{}ms", global_max_rtt);
-    let remaining_space = scale_width.saturating_sub(min_label.len()).saturating_sub(max_label.len());
+    // Calculate intermediate values for scale labels
+    let calculate_intermediate = |ratio: f64| -> u64 {
+        match scale {
+            SparklineScale::Linear => {
+                (global_min_rtt as f64 + ratio * (global_max_rtt - global_min_rtt) as f64) as u64
+            }
+            SparklineScale::Logarithmic => {
+                let log_min = ((global_min_rtt + 1) as f64).log10();
+                let log_max = ((global_max_rtt + 1) as f64).log10();
+                let log_val = log_min + ratio * (log_max - log_min);
+                (10_f64.powf(log_val) - 1.0) as u64
+            }
+        }
+    };
+    
+    // Create 4 evenly spaced labels across the scale
+    let labels = [
+        format!("{}ms", global_min_rtt),
+        format!("{}ms", calculate_intermediate(0.33)),
+        format!("{}ms", calculate_intermediate(0.67)),
+        format!("{}ms", global_max_rtt),
+    ];
+    
+    // Calculate positions for labels
+    let label_positions = [0, scale_width / 3, (scale_width * 2) / 3, scale_width.saturating_sub(1)];
+    
+    // Build the label line with proper positioning
+    let mut current_pos = 0;
+    let mut label_spans = Vec::new();
+    
+    for (i, &pos) in label_positions.iter().enumerate() {
+        if i < labels.len() {
+            // Add spaces to reach the position
+            if pos > current_pos {
+                label_spans.push(Span::raw(" ".repeat(pos - current_pos)));
+            }
+            // Add the label
+            label_spans.push(Span::raw(labels[i].clone()));
+            current_pos = pos + labels[i].len();
+        }
+    }
+    
+    // Fill remaining space
+    if current_pos < scale_width {
+        label_spans.push(Span::raw(" ".repeat(scale_width - current_pos)));
+    }
     
     let scale_text = vec![
-        Line::from(vec![
-            Span::raw(format!("{} Scale: ", scale_name)),
-            Span::styled("Low", Style::default().fg(Color::Green)),
-            Span::raw(" "),
-            Span::raw("▁▂▃▄▅▆▇█"),
-            Span::raw(" "),
-            Span::styled("High", Style::default().fg(Color::Red)),
-        ]),
-        Line::from(vec![
-            Span::raw("Range: "),
-            Span::raw(min_label.clone()),
-            Span::raw(" ".repeat(remaining_space)),
-            Span::raw(max_label),
-        ]),
+        Line::from(label_spans),
         Line::from(scale_spans),
     ];
 
     Paragraph::new(scale_text)
-        .block(Block::default().borders(Borders::ALL).title("Sparkline Scale"))
+        .block(Block::default().borders(Borders::ALL).title(format!("Sparkline Scale ({})", scale_name)))
 }
 
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
@@ -502,7 +531,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(8),    // Main table
-            Constraint::Length(5), // Scale visualization
+            Constraint::Length(4), // Scale visualization
             Constraint::Length(5), // RTT graph
             Constraint::Length(3), // Status bar
         ])
