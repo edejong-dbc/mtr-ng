@@ -48,15 +48,12 @@ impl UiState {
 
 
 fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale) -> String {
+
     if hop.sent == 0 {
         return "".to_string();
     }
 
-    // Debug output
-    if hop.hop <= 3 && hop.sent > 0 {
-        tracing::debug!("Hop {}: sent={}, received={}, packet_history.len()={}, loss%={:.1}", 
-                        hop.hop, hop.sent, hop.received, hop.packet_history.len(), hop.loss_percent);
-    }
+
 
     // Use the chronological packet history from HopStats
     hop.packet_history

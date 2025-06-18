@@ -727,6 +727,10 @@ impl MtrSession {
             let actual_send_time = Instant::now();
             {
                 let mut session = session_arc.lock().unwrap();
+                
+                // Clean up old sequences before adding new ones
+                session.cleanup_old_sequences();
+                
                 let entry = SequenceEntry {
                     index: hop_index,
                     transit: true,
