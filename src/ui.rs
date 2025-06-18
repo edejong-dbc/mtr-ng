@@ -469,18 +469,26 @@ fn generate_scale_visualization(
     }
     
     // Create the scale text with range information
+    let min_label = format!("{}ms", global_min_rtt);
+    let max_label = format!("{}ms", global_max_rtt);
+    let remaining_space = scale_width.saturating_sub(min_label.len()).saturating_sub(max_label.len());
+    
     let scale_text = vec![
         Line::from(vec![
             Span::raw(format!("{} Scale: ", scale_name)),
-            Span::raw(format!("{}ms", global_min_rtt)),
+            Span::styled("Low", Style::default().fg(Color::Green)),
             Span::raw(" "),
+            Span::raw("▁▂▃▄▅▆▇█"),
+            Span::raw(" "),
+            Span::styled("High", Style::default().fg(Color::Red)),
+        ]),
+        Line::from(vec![
+            Span::raw("Range: "),
+            Span::raw(min_label.clone()),
+            Span::raw(" ".repeat(remaining_space)),
+            Span::raw(max_label),
         ]),
         Line::from(scale_spans),
-        Line::from(vec![
-            Span::raw(" ".repeat(scale_name.len() + 8)), // Align with "Scale: "
-            Span::raw(" ".repeat(scale_width.saturating_sub(format!("{}ms", global_max_rtt).len()))),
-            Span::raw(format!("{}ms", global_max_rtt)),
-        ]),
     ];
 
     Paragraph::new(scale_text)
@@ -494,7 +502,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(8),    // Main table
-            Constraint::Length(3), // Scale visualization
+            Constraint::Length(5), // Scale visualization
             Constraint::Length(5), // RTT graph
             Constraint::Length(3), // Status bar
         ])
