@@ -110,14 +110,21 @@ impl UiState {
     pub fn get_header(&self) -> String {
         let mut header = String::from("  ");
         for (i, column) in self.columns.iter().enumerate() {
-            if i > 0 && *column != Column::Graph {
+            if i > 0 {
                 header.push(' ');
             }
             match column {
-                Column::Hop => {} // No header for hop number column
-                Column::Host => header.push_str(&format!("{:21}", column.header())),
-                Column::Graph => header.push_str(column.header()),
-                _ => header.push_str(&format!("{:>8}", column.header())),
+                Column::Hop => {} // No header for hop number column (3 chars: "XX.")
+                Column::Host => header.push_str(&format!("{:21}", column.header())), // 21 chars
+                Column::Loss => header.push_str(&format!("{:>7}", column.header())), // 7 chars for "XX.X%"
+                Column::Sent => header.push_str(&format!("{:>4}", column.header())), // 4 chars
+                Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => {
+                    header.push_str(&format!("{:>9}", column.header())); // 9 chars for "XXX.Xms"
+                }
+                Column::Jitter | Column::JitterAvg => {
+                    header.push_str(&format!("{:>9}", column.header())); // 9 chars for "XXX.Xms"
+                }
+                Column::Graph => header.push_str(column.header()), // Variable width
             }
         }
         header
@@ -300,7 +307,12 @@ fn generate_row_spans(
 ) -> Vec<Span<'static>> {
     let mut row_spans = Vec::new();
 
-    for column in columns {
+    for (i, column) in columns.iter().enumerate() {
+        // Add space before each column except the first
+        if i > 0 {
+            row_spans.push(Span::raw(" "));
+        }
+        
         match column {
             Column::Hop => {
                 row_spans.push(Span::styled(
@@ -316,74 +328,73 @@ fn generate_row_spans(
             }
             Column::Loss => {
                 row_spans.push(Span::styled(
-                    format!("{:6.1}%", hop.loss_percent),
+                    format!("{:>7.1}%", hop.loss_percent),
                     Style::default().fg(loss_color),
                 ));
             }
             Column::Sent => {
                 row_spans.push(Span::styled(
-                    format!("{:4}", hop.sent),
+                    format!("{:>4}", hop.sent),
                     Style::default().fg(Color::Gray),
                 ));
             }
             Column::Last => {
                 let value = if let Some(rtt) = hop.last_rtt {
-                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
             }
             Column::Avg => {
                 let value = if let Some(rtt) = hop.avg_rtt {
-                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
             }
             Column::Ema => {
                 let value = if let Some(rtt) = hop.ema_rtt {
-                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
             }
             Column::Jitter => {
                 let value = if let Some(jitter) = hop.last_jitter {
-                    format!("{:6.1}ms", jitter.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", jitter.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Magenta)));
             }
             Column::JitterAvg => {
                 let value = if let Some(jitter) = hop.jitter_avg {
-                    format!("{:6.1}ms", jitter.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", jitter.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Magenta)));
             }
             Column::Best => {
                 let value = if let Some(rtt) = hop.best_rtt {
-                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Green)));
             }
             Column::Worst => {
                 let value = if let Some(rtt) = hop.worst_rtt {
-                    format!("{:6.1}ms", rtt.as_secs_f64() * 1000.0)
+                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "   ???ms".to_string()
+                    "    ???ms".to_string()
                 };
                 row_spans.push(Span::styled(value, Style::default().fg(Color::Red)));
             }
             Column::Graph => {
-                row_spans.push(Span::styled(" ".to_string(), Style::default())); // Space before sparkline
                 row_spans.extend(sparkline_spans.iter().cloned());
             }
         }
