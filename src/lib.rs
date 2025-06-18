@@ -1,6 +1,7 @@
 pub mod args;
 pub mod hop_stats;
 pub mod session;
+pub mod sixel;
 pub mod ui;
 pub mod report;
 

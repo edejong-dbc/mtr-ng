@@ -2,6 +2,7 @@ use crate::{MtrSession, HopStats, Result};
 use crate::session::{NetworkEvent, RTTUpdate};
 use crate::SparklineScale;
 use crate::args::Column;
+use crate::sixel::SixelRenderer;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -32,6 +33,7 @@ pub struct UiState {
     pub color_support: ColorSupport,
     pub columns: Vec<Column>,
     pub current_column_index: usize,
+    pub sixel_renderer: SixelRenderer,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,12 +45,13 @@ pub enum ColorSupport {
 }
 
 impl UiState {
-    pub fn new(scale: SparklineScale, columns: Vec<Column>) -> Self {
+    pub fn new(scale: SparklineScale, columns: Vec<Column>, enable_sixel: bool) -> Self {
         Self {
             current_sparkline_scale: scale,
             color_support: detect_color_support(),
             columns,
             current_column_index: 0,
+            sixel_renderer: SixelRenderer::new(enable_sixel),
         }
     }
     
@@ -150,9 +153,20 @@ fn detect_color_support() -> ColorSupport {
 
 
 
-fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale, color_support: ColorSupport) -> Vec<Span<'static>> {
+fn generate_colored_sparkline(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale, color_support: ColorSupport, sixel_renderer: &SixelRenderer) -> Vec<Span<'static>> {
     if hop.sent == 0 {
         return vec![];
+    }
+    
+    // If Sixel is enabled and we have data, try to generate Sixel sparkline
+    if sixel_renderer.enabled && !hop.rtts.is_empty() {
+        let rtt_data: Vec<f64> = hop.rtts.iter().map(|rtt| rtt.as_secs_f64() * 1000.0).collect(); // Convert to milliseconds
+        if !rtt_data.is_empty() {
+            let sixel_graph = sixel_renderer.generate_sparkline(&rtt_data, 20, 6); // Small inline size
+            if !sixel_graph.is_empty() {
+                return vec![Span::raw(sixel_graph)];
+            }
+        }
     }
 
     // Use the chronological packet history from HopStats
@@ -421,7 +435,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 
 
             // Generate colored sparkline for RTT history including lost packets
-            let sparkline_spans = generate_colored_sparkline(hop, global_max_rtt, ui_state.current_sparkline_scale, ui_state.color_support);
+            let sparkline_spans = generate_colored_sparkline(hop, global_max_rtt, ui_state.current_sparkline_scale, ui_state.color_support, &ui_state.sixel_renderer);
 
             // Generate row data based on selected columns
             let row_spans = generate_row_spans(hop, &hostname, loss_color, &sparkline_spans, &ui_state.columns);
@@ -530,7 +544,7 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     let session_clone = Arc::clone(&session_arc);
     
     // Create UI state with initial sparkline scale and columns from args
-    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns());
+    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns(), session.args.sixel);
     
     // Create update notification channel for real-time updates
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<()>();
@@ -630,7 +644,7 @@ pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()
     let mut terminal = Terminal::new(backend)?;
 
     // Create UI state with initial sparkline scale and columns from args
-    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns());
+    let mut ui_state = UiState::new(session.args.sparkline_scale, session.args.get_columns(), session.args.sixel);
 
     // Create channel for receiving network updates
     let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<NetworkEvent>();

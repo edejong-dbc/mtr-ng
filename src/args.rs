@@ -146,8 +146,12 @@ pub struct Args {
     #[arg(long, value_enum, value_delimiter = ',')]
     pub fields: Option<Vec<Column>>,
 
+    /// Enable Sixel graphics for sparklines (requires compatible terminal)
+    #[arg(long, help = "Use Sixel graphics for enhanced sparklines")]
+    pub sixel: bool,
+
     /// Show all available columns including jitter metrics
-    #[arg(long)]
+    #[arg(long, help = "Display all available columns")]
     pub show_all: bool,
 }
 
