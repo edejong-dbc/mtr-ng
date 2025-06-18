@@ -436,6 +436,57 @@ fn generate_column_constraints(columns: &[Column]) -> Vec<Constraint> {
     }).collect()
 }
 
+fn generate_scale_visualization(
+    global_min_rtt: u64,
+    global_max_rtt: u64,
+    scale: SparklineScale,
+    color_support: ColorSupport,
+    width: usize,
+) -> Paragraph<'static> {
+    if global_min_rtt == global_max_rtt {
+        return Paragraph::new("No RTT data available")
+            .block(Block::default().borders(Borders::ALL).title("Sparkline Scale"));
+    }
+
+    let scale_name = match scale {
+        SparklineScale::Linear => "Linear",
+        SparklineScale::Logarithmic => "Log₁₀",
+    };
+
+    // Generate a visual scale with sparkline characters
+    let scale_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let scale_width = (width / 2).min(40).max(10); // Use half width, between 10-40 chars
+    
+    let mut scale_spans = Vec::new();
+    
+    // Generate the visual scale bar
+    for i in 0..scale_width {
+        let ratio = i as f64 / (scale_width - 1) as f64;
+        let level = (ratio * 8.0) as usize;
+        let char = scale_chars.get(level).unwrap_or(&'█');
+        let (_, color) = get_rtt_char_and_color(ratio, color_support);
+        scale_spans.push(Span::styled(char.to_string(), Style::default().fg(color)));
+    }
+    
+    // Create the scale text with range information
+    let scale_text = vec![
+        Line::from(vec![
+            Span::raw(format!("{} Scale: ", scale_name)),
+            Span::raw(format!("{}ms", global_min_rtt)),
+            Span::raw(" "),
+        ]),
+        Line::from(scale_spans),
+        Line::from(vec![
+            Span::raw(" ".repeat(scale_name.len() + 8)), // Align with "Scale: "
+            Span::raw(" ".repeat(scale_width.saturating_sub(format!("{}ms", global_max_rtt).len()))),
+            Span::raw(format!("{}ms", global_max_rtt)),
+        ]),
+    ];
+
+    Paragraph::new(scale_text)
+        .block(Block::default().borders(Borders::ALL).title("Sparkline Scale"))
+}
+
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -443,6 +494,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .constraints([
             Constraint::Length(3), // Header
             Constraint::Min(8),    // Main table
+            Constraint::Length(3), // Scale visualization
             Constraint::Length(5), // RTT graph
             Constraint::Length(3), // Status bar
         ])
@@ -568,6 +620,16 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     
     f.render_widget(table, chunks[1]);
 
+    // Scale visualization
+    let scale_widget = generate_scale_visualization(
+        global_min_rtt,
+        global_max_rtt,
+        ui_state.current_sparkline_scale,
+        ui_state.color_support,
+        chunks[2].width.saturating_sub(4) as usize, // Available width minus borders
+    );
+    f.render_widget(scale_widget, chunks[2]);
+
     // RTT Graph for the target host
     if let Some(target_hop) = session.hops.iter().find(|h| h.received > 0) {
         let data: Vec<(f64, f64)> = target_hop
@@ -604,7 +666,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                         .style(Style::default().fg(Color::Gray))
                         .bounds([min_rtt * 0.9, max_rtt * 1.1]),
                 );
-            f.render_widget(chart, chunks[2]);
+            f.render_widget(chart, chunks[3]);
         }
     }
 
@@ -647,7 +709,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let status = Paragraph::new(status_text)
         .style(Style::default().fg(status_color))
         .block(Block::default().borders(Borders::ALL).title("Status"));
-    f.render_widget(status, chunks[3]);
+    f.render_widget(status, chunks[4]);
 }
 
 pub async fn run_interactive(session: MtrSession) -> Result<()> {
