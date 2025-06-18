@@ -12,13 +12,13 @@ fn format_column_headers(columns: &[Column]) -> String {
             Column::Host => {} // No header padding needed
             Column::Loss => header.push_str("Loss%"),
             Column::Sent => header.push_str(" Snt"),
-            Column::Last => header.push_str("    Last"),
-            Column::Avg => header.push_str("     Avg"),
-            Column::Ema => header.push_str("    EMA"),
-            Column::Jitter => header.push_str("   Jttr"),
-            Column::JitterAvg => header.push_str("   JAvg"),
-            Column::Best => header.push_str("   Best"),
-            Column::Worst => header.push_str("   Wrst"),
+            Column::Last => header.push_str("   Last"),
+            Column::Avg => header.push_str("    Avg"),
+            Column::Ema => header.push_str("   EMA"),
+            Column::Jitter => header.push_str("  Jttr"),
+            Column::JitterAvg => header.push_str("  JAvg"),
+            Column::Best => header.push_str("  Best"),
+            Column::Worst => header.push_str("  Wrst"),
             Column::Graph => header.push_str("StDev"), // Use StDev for report mode instead of graph
         }
     }

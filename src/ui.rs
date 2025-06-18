@@ -14,7 +14,7 @@ use ratatui::{
     style::{Color, Style},
     symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, List, ListItem, Paragraph},
+    widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Table, Row, Cell},
     Frame, Terminal,
 };
 use std::{
@@ -162,6 +162,7 @@ fn generate_colored_sparkline(
     scale: SparklineScale,
     color_support: ColorSupport,
     sixel_renderer: &SixelRenderer,
+    max_width: usize,
 ) -> Vec<Span<'static>> {
     if hop.sent == 0 {
         return vec![];
@@ -183,7 +184,7 @@ fn generate_colored_sparkline(
     }
 
     // Use the chronological packet history from HopStats
-    hop.packet_history
+    let packet_spans: Vec<Span<'static>> = hop.packet_history
         .iter()
         .map(|outcome| {
             match outcome {
@@ -214,7 +215,15 @@ fn generate_colored_sparkline(
                 }
             }
         })
-        .collect()
+        .collect();
+
+    // If the sparkline is longer than max_width, show only the most recent data (right side)
+    if packet_spans.len() > max_width {
+        let skip_count = packet_spans.len() - max_width;
+        packet_spans.into_iter().skip(skip_count).collect()
+    } else {
+        packet_spans
+    }
 }
 
 fn get_rtt_char_and_color(ratio: f64, color_support: ColorSupport) -> (char, Color) {
@@ -298,109 +307,129 @@ fn get_pending_packet_color(color_support: ColorSupport) -> Color {
     }
 }
 
-fn generate_row_spans(
+
+fn generate_table_cells(
     hop: &crate::HopStats,
     hostname: &str,
     loss_color: Color,
     sparkline_spans: &[Span<'static>],
     columns: &[Column],
-) -> Vec<Span<'static>> {
-    let mut row_spans = Vec::new();
-
-    for (i, column) in columns.iter().enumerate() {
-        // Add space before each column except the first
-        if i > 0 {
-            row_spans.push(Span::raw(" "));
-        }
-        
+) -> Vec<Cell<'static>> {
+    let mut cells = Vec::new();
+    
+    for column in columns {
         match column {
             Column::Hop => {
-                row_spans.push(Span::styled(
-                    format!("{:2}.", hop.hop),
-                    Style::default().fg(Color::White),
-                ));
+                cells.push(Cell::from(format!("{:2}.", hop.hop)));
             }
             Column::Host => {
-                row_spans.push(Span::styled(
-                    format!("{:21}", hostname),
-                    Style::default().fg(Color::Cyan),
-                ));
+                cells.push(Cell::from(hostname.to_string()));
             }
             Column::Loss => {
-                row_spans.push(Span::styled(
-                    format!("{:>7.1}%", hop.loss_percent),
-                    Style::default().fg(loss_color),
-                ));
+                let loss_text = if hop.sent > 0 {
+                    format!("{:4.1}%", hop.loss_percent)
+                } else {
+                    "  -".to_string()
+                };
+                cells.push(Cell::from(loss_text).style(Style::default().fg(loss_color)));
             }
             Column::Sent => {
-                row_spans.push(Span::styled(
-                    format!("{:>4}", hop.sent),
-                    Style::default().fg(Color::Gray),
-                ));
+                cells.push(Cell::from(format!("{:4}", hop.sent)));
             }
             Column::Last => {
-                let value = if let Some(rtt) = hop.last_rtt {
-                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
+                let last_text = if let Some(last_rtt) = hop.last_rtt {
+                    format!("{:6.1}ms", last_rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "    ???ms".to_string()
+                    "   -".to_string()
                 };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
+                cells.push(Cell::from(last_text));
             }
             Column::Avg => {
-                let value = if let Some(rtt) = hop.avg_rtt {
-                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
+                let avg_text = if let Some(avg_rtt) = hop.avg_rtt {
+                    format!("{:6.1}ms", avg_rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "    ???ms".to_string()
+                    "   -".to_string()
                 };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
+                cells.push(Cell::from(avg_text));
             }
             Column::Ema => {
-                let value = if let Some(rtt) = hop.ema_rtt {
-                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
+                let ema_text = if let Some(ema_rtt) = hop.ema_rtt {
+                    format!("{:6.1}ms", ema_rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "    ???ms".to_string()
+                    "   -".to_string()
                 };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Yellow)));
-            }
-            Column::Jitter => {
-                let value = if let Some(jitter) = hop.last_jitter {
-                    format!("{:>9.1}ms", jitter.as_secs_f64() * 1000.0)
-                } else {
-                    "    ???ms".to_string()
-                };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Magenta)));
-            }
-            Column::JitterAvg => {
-                let value = if let Some(jitter) = hop.jitter_avg {
-                    format!("{:>9.1}ms", jitter.as_secs_f64() * 1000.0)
-                } else {
-                    "    ???ms".to_string()
-                };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Magenta)));
+                cells.push(Cell::from(ema_text));
             }
             Column::Best => {
-                let value = if let Some(rtt) = hop.best_rtt {
-                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
+                let best_text = if let Some(best_rtt) = hop.best_rtt {
+                    format!("{:6.1}ms", best_rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "    ???ms".to_string()
+                    "   -".to_string()
                 };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Green)));
+                cells.push(Cell::from(best_text));
             }
             Column::Worst => {
-                let value = if let Some(rtt) = hop.worst_rtt {
-                    format!("{:>9.1}ms", rtt.as_secs_f64() * 1000.0)
+                let worst_text = if let Some(worst_rtt) = hop.worst_rtt {
+                    format!("{:6.1}ms", worst_rtt.as_secs_f64() * 1000.0)
                 } else {
-                    "    ???ms".to_string()
+                    "   -".to_string()
                 };
-                row_spans.push(Span::styled(value, Style::default().fg(Color::Red)));
+                cells.push(Cell::from(worst_text));
+            }
+            Column::Jitter => {
+                let jitter_text = if let Some(jitter) = hop.last_jitter {
+                    format!("{:6.1}ms", jitter.as_secs_f64() * 1000.0)
+                } else {
+                    "   -".to_string()
+                };
+                cells.push(Cell::from(jitter_text));
+            }
+            Column::JitterAvg => {
+                let jitter_avg_text = if let Some(jitter_avg) = hop.jitter_avg {
+                    format!("{:6.1}ms", jitter_avg.as_secs_f64() * 1000.0)
+                } else {
+                    "   -".to_string()
+                };
+                cells.push(Cell::from(jitter_avg_text));
             }
             Column::Graph => {
-                row_spans.extend(sparkline_spans.iter().cloned());
+                // Create a cell with the sparkline spans
+                if !sparkline_spans.is_empty() {
+                    cells.push(Cell::from(Line::from(sparkline_spans.to_vec())));
+                } else {
+                    cells.push(Cell::from(""));
+                }
             }
         }
     }
+    
+    cells
+}
 
-    row_spans
+fn generate_column_constraints(columns: &[Column]) -> Vec<Constraint> {
+    // Check if Graph column is present
+    let has_graph = columns.iter().any(|col| matches!(col, Column::Graph));
+    
+    columns.iter().map(|column| {
+        match column {
+            Column::Hop => Constraint::Length(3),     // "XX."
+            Column::Host => Constraint::Min(15),      // Host names
+            Column::Loss => Constraint::Length(7),    // "XX.X%"
+            Column::Sent => Constraint::Length(4),    // Number
+            Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => {
+                Constraint::Length(9) // "XXX.Xms"
+            }
+            Column::Jitter | Column::JitterAvg => Constraint::Length(9), // "XXX.Xms"
+            Column::Graph => {
+                // Graph column should fill remaining space
+                if has_graph {
+                    Constraint::Percentage(100) // Take all remaining space
+                } else {
+                    Constraint::Min(20)
+                }
+            }
+        }
+    }).collect()
 }
 
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
@@ -437,8 +466,23 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .max()
         .unwrap_or(1);
 
-    // Main statistics table
-    let items: Vec<ListItem> = session
+    // Main statistics table with right-aligned numeric headers
+    let header_cells = ui_state.columns.iter().map(|col| {
+        match col {
+            // Numeric columns should be right-aligned
+            Column::Loss | Column::Sent | Column::Last | Column::Avg | Column::Ema | 
+            Column::Jitter | Column::JitterAvg | Column::Best | Column::Worst => {
+                Cell::from(format!("{:>width$}", col.header(), width = col.width()))
+            }
+            // Text columns stay left-aligned
+            _ => Cell::from(col.header())
+        }
+    });
+    let header = Row::new(header_cells)
+        .style(Style::default().fg(Color::Yellow))
+        .height(1);
+
+    let rows = session
         .hops
         .iter()
         .filter(|hop| hop.sent > 0)
@@ -470,6 +514,20 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 hostname
             };
 
+            // Calculate available width for Graph column
+            let graph_width = if ui_state.columns.contains(&Column::Graph) {
+                // Calculate used width by other columns
+                let used_width: usize = ui_state.columns.iter()
+                    .filter(|col| !matches!(col, Column::Graph))
+                    .map(|col| col.width() + 1) // +1 for spacing
+                    .sum();
+                // Use remaining width, minimum 20 chars
+                let table_width = chunks[1].width.saturating_sub(4) as usize; // -4 for borders
+                table_width.saturating_sub(used_width).max(20)
+            } else {
+                20 // Default fallback
+            };
+
             // Generate colored sparkline for RTT history including lost packets
             let sparkline_spans = generate_colored_sparkline(
                 hop,
@@ -477,10 +535,11 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 ui_state.current_sparkline_scale,
                 ui_state.color_support,
                 &ui_state.sixel_renderer,
+                graph_width,
             );
 
-            // Generate row data based on selected columns
-            let row_spans = generate_row_spans(
+            // Generate table cells based on selected columns
+            let cells = generate_table_cells(
                 hop,
                 &hostname,
                 loss_color,
@@ -488,16 +547,19 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                 &ui_state.columns,
             );
 
-            ListItem::new(Line::from(row_spans))
-        })
-        .collect();
+            Row::new(cells).height(1)
+        });
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(ui_state.get_header()),
-    );
-    f.render_widget(list, chunks[1]);
+    // Generate column constraints based on selected columns
+    let constraints = generate_column_constraints(&ui_state.columns);
+
+    let table = Table::new(rows)
+        .header(header)
+        .widths(&constraints)
+        .block(Block::default().borders(Borders::ALL).title("Network Trace"))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Gray));
+    
+    f.render_widget(table, chunks[1]);
 
     // RTT Graph for the target host
     if let Some(target_hop) = session.hops.iter().find(|h| h.received > 0) {
