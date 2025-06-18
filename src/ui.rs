@@ -45,49 +45,30 @@ impl UiState {
     }
 }
 
-#[derive(Debug, Clone)]
-enum PacketResult {
-    Received(u64), // RTT in milliseconds
-    Lost,          // Packet was sent but no response received
-}
+
 
 fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, scale: SparklineScale) -> String {
     if hop.sent == 0 {
         return "".to_string();
     }
 
-    // Create a vector representing all sent packets
-    let mut packet_results = Vec::new();
-    
-    // Add received packets (we have RTTs for these)
-    for rtt in &hop.rtts {
-        packet_results.push(PacketResult::Received((rtt.as_secs_f64() * 1000.0) as u64));
-    }
-    
-    // Add lost packets (sent - received)
-    let lost_count = hop.sent - hop.received;
-    for _ in 0..lost_count {
-        packet_results.push(PacketResult::Lost);
-    }
-    
-    // Note: This is a simplified approach. In reality, we'd need to track the order
-    // of sent vs received packets, but for now this gives a good visual indication
-    
-    packet_results
+    // Use the chronological packet history from HopStats
+    hop.packet_history
         .iter()
-        .map(|packet| {
-            match packet {
-                PacketResult::Received(rtt) => {
+        .map(|outcome| {
+            match outcome {
+                crate::hop_stats::PacketOutcome::Received(rtt) => {
+                    let rtt_ms = (rtt.as_secs_f64() * 1000.0) as u64;
                     let ratio = match scale {
                         SparklineScale::Linear => {
-                            *rtt as f64 / global_max_rtt as f64
+                            rtt_ms as f64 / global_max_rtt as f64
                         }
                         SparklineScale::Logarithmic => {
-                            if *rtt == 0 || global_max_rtt == 0 {
+                            if rtt_ms == 0 || global_max_rtt == 0 {
                                 0.0
                             } else {
                                 // Logarithmic scaling: log(rtt + 1) / log(max_rtt + 1)
-                                ((*rtt + 1) as f64).ln() / ((global_max_rtt + 1) as f64).ln()
+                                ((rtt_ms + 1) as f64).ln() / ((global_max_rtt + 1) as f64).ln()
                             }
                         }
                     };
@@ -104,7 +85,7 @@ fn generate_sparkline_with_losses(hop: &crate::HopStats, global_max_rtt: u64, sc
                         _ => '█',
                     }
                 }
-                PacketResult::Lost => '·', // Middle dot for lost packets
+                crate::hop_stats::PacketOutcome::Lost => '·', // Middle dot for lost packets
             }
         })
         .collect::<String>()

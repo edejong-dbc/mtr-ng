@@ -1,6 +1,12 @@
 use std::{collections::VecDeque, net::IpAddr, time::Duration};
 
 #[derive(Debug, Clone)]
+pub enum PacketOutcome {
+    Received(Duration), // RTT
+    Lost,              // Timeout/no response
+}
+
+#[derive(Debug, Clone)]
 pub struct HopStats {
     pub hop: u8,
     pub addr: Option<IpAddr>,
@@ -12,6 +18,7 @@ pub struct HopStats {
     pub worst_rtt: Option<Duration>,
     pub avg_rtt: Option<Duration>,
     pub rtts: VecDeque<Duration>,
+    pub packet_history: VecDeque<PacketOutcome>, // Chronological packet outcomes
     pub loss_percent: f64,
 }
 
@@ -28,6 +35,7 @@ impl HopStats {
             worst_rtt: None,
             avg_rtt: None,
             rtts: VecDeque::with_capacity(100),
+            packet_history: VecDeque::with_capacity(100),
             loss_percent: 0.0,
         }
     }
@@ -37,8 +45,15 @@ impl HopStats {
         self.last_rtt = Some(rtt);
         self.rtts.push_back(rtt);
         
+        // Add to packet history chronologically
+        self.packet_history.push_back(PacketOutcome::Received(rtt));
+        
         if self.rtts.len() > 100 {
             self.rtts.pop_front();
+        }
+        
+        if self.packet_history.len() > 100 {
+            self.packet_history.pop_front();
         }
 
         // Update statistics
@@ -56,6 +71,13 @@ impl HopStats {
     }
 
     pub fn add_timeout(&mut self) {
+        // Add lost packet to chronological history
+        self.packet_history.push_back(PacketOutcome::Lost);
+        
+        if self.packet_history.len() > 100 {
+            self.packet_history.pop_front();
+        }
+        
         self.update_loss_percent();
     }
 

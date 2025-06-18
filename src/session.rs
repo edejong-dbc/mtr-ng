@@ -305,14 +305,24 @@ impl MtrSession {
     fn cleanup_old_sequences(&mut self) {
         // Remove entries older than 5 seconds to prevent sequence number collisions
         let cutoff_time = Instant::now() - Duration::from_secs(5);
+        let mut timed_out_entries = Vec::new();
+        
         self.sequence_table.retain(|seq, entry| {
             if entry.send_time < cutoff_time {
-                debug!("Cleaned up old sequence entry: seq={}", seq);
+                debug!("Packet timed out: seq={}, hop={}", seq, entry.index + 1);
+                timed_out_entries.push(entry.index);
                 false
             } else {
                 true
             }
         });
+        
+        // Add timeouts to the packet history for timed out entries
+        for hop_index in timed_out_entries {
+            if hop_index < self.hops.len() {
+                self.hops[hop_index].add_timeout();
+            }
+        }
     }
     
     // Equivalent to mark_sequence_complete in original mtr
