@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
     sync::Arc,
 };
-use tokio::time;
+use tokio::{sync::mpsc, time};
 use tracing::{debug, info, warn};
 use trust_dns_resolver::{config::*, TokioAsyncResolver};
 use anyhow::anyhow;
@@ -24,6 +24,22 @@ const MAX_SEQUENCE: u16 = 65535;
 
 // Add callback type for real-time updates
 pub type UpdateCallback = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Debug, Clone)]
+pub struct RTTUpdate {
+    pub hop: usize,           // Hop number (0-based index)
+    pub rtt: Duration,        // Round trip time
+    pub addr: IpAddr,         // IP address that responded
+    pub sent_count: usize,    // Number of packets sent to this hop so far
+}
+
+#[derive(Debug, Clone)]
+pub enum NetworkEvent {
+    RTTUpdate(RTTUpdate),
+    HopTimeout { hop: usize, sent_count: usize },
+    TargetReached { hop: usize },
+    RoundComplete { round: usize },
+}
 
 #[derive(Debug, Clone)]
 pub struct SequenceEntry {
@@ -543,6 +559,9 @@ impl MtrSession {
         self.update_callback = Some(callback);
     }
 
+    // TODO: Channel-based real-time trace (to be implemented)
+    // This will replace the shared mutex approach with lock-free channels
+
     // Run MTR algorithm directly on shared session for real-time UI updates
     pub async fn run_trace_with_realtime_updates(session_arc: std::sync::Arc<std::sync::Mutex<Self>>) -> Result<()> {
         // Extract basic configuration
@@ -591,14 +610,26 @@ impl MtrSession {
         for round in 0..args.count {
             debug!("MTR Round {}/{}", round + 1, args.count);
             
-            // Send batch to all hops in quick succession (proper MTR behavior)
-            Self::net_send_batch_realtime(&session_arc, target, &send_socket).await?;
+            let round_start = Instant::now();
+            let round_duration = Duration::from_millis(args.interval);
             
-            // Collect responses for this interval with real-time updates
-            let collect_duration = Duration::from_millis(args.interval);
-            let start_collect = Instant::now();
+            // Use select! to run sending and receiving concurrently
+            tokio::select! {
+                _ = Self::net_send_batch_realtime(&session_arc, target, &send_socket) => {
+                    debug!("Batch sending completed");
+                }
+                _ = async {
+                    while round_start.elapsed() < round_duration {
+                        Self::net_process_return_realtime(&session_arc, &recv_socket, target).await;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                } => {
+                    debug!("Round duration completed");
+                }
+            }
             
-            while start_collect.elapsed() < collect_duration {
+            // Continue receiving until round ends
+            while round_start.elapsed() < round_duration {
                 Self::net_process_return_realtime(&session_arc, &recv_socket, target).await;
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
@@ -673,23 +704,23 @@ impl MtrSession {
                 session.sequence_table.insert(seq, entry);
             }
             
-            // Very small delay to avoid overwhelming network but not affect timing
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            // Small delay between packets to spread out send times
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
         
         // Check restart conditions and update hop discovery
-        let mut restart = false;
-        let mut n_unknown = 0;
+        let mut _restart = false;
+        let mut _n_unknown = 0;
         {
             let mut session = session_arc.lock().unwrap();
             
             // Count unknown hops and check for target reached
             for i in 0..max_hop_to_send {
                 if session.hops[i].addr.is_none() {
-                    n_unknown += 1;
+                    _n_unknown += 1;
                 } else if let Some(IpAddr::V4(addr)) = session.hops[i].addr {
                     if addr == target {
-                        restart = true;
+                        _restart = true;
                         session.num_hosts = i + 1;
                         debug!("Target reached at hop {}", i + 1);
                         break;
@@ -731,7 +762,7 @@ impl MtrSession {
         receive_time: Instant, 
         target: Ipv4Addr
     ) {
-        let (index, send_time, callback) = {
+        let callback = {
             let mut session = session_arc.lock().unwrap();
             
             let (index, send_time) = match session.mark_sequence_complete(seq) {
@@ -765,7 +796,7 @@ impl MtrSession {
                 info!("Reached target {} at hop {}", target, index + 1);
             }
             
-            (index, send_time, session.update_callback.clone())
+            session.update_callback.clone()
         };
         
         // Trigger real-time UI update when a response arrives (outside lock)

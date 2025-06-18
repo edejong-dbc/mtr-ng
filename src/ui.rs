@@ -1,4 +1,5 @@
 use crate::{MtrSession, HopStats, Result};
+use crate::session::{NetworkEvent, RTTUpdate};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -295,6 +296,125 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+// Channel-based UI that receives network updates without lock contention
+pub async fn run_interactive_with_channels(mut session: MtrSession) -> Result<()> {
+    // Terminal setup
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Create channel for receiving network updates
+    let (event_sender, mut event_receiver) = mpsc::unbounded_channel::<NetworkEvent>();
+    
+    // Start the network trace in a background task
+    let trace_handle = {
+        let session_clone = session.clone();
+        tokio::spawn(async move {
+            // For now, use the existing real-time trace but send updates via channel
+            // TODO: Implement proper channel-based network trace
+            if let Err(e) = run_network_trace_with_events(session_clone, event_sender).await {
+                debug!("Network trace failed: {}", e);
+            }
+        })
+    };
+
+    // Main UI loop - processes network events and renders
+    let mut last_tick = Instant::now();
+    let tick_rate = Duration::from_millis(100);
+
+    loop {
+        // Process all available network events (non-blocking)
+        while let Ok(event) = event_receiver.try_recv() {
+            match event {
+                NetworkEvent::RTTUpdate(update) => {
+                    // Update our local session state
+                    if let Some(hop) = session.hops.get_mut(update.hop) {
+                        hop.add_rtt(update.rtt);
+                        if hop.addr.is_none() {
+                            hop.addr = Some(update.addr);
+                        }
+                    }
+                }
+                NetworkEvent::HopTimeout { hop, sent_count: _ } => {
+                    if let Some(hop_stats) = session.hops.get_mut(hop) {
+                        hop_stats.add_timeout();
+                    }
+                }
+                NetworkEvent::TargetReached { hop: _ } => {
+                    // Handle target reached
+                }
+                NetworkEvent::RoundComplete { round: _ } => {
+                    // Handle round completion
+                }
+            }
+        }
+
+        // Render UI (no locks needed - we own the session state)
+        let should_update = last_tick.elapsed() >= tick_rate;
+        if should_update {
+            terminal.draw(|f| render_ui(f, &session))?;
+            last_tick = Instant::now();
+        }
+
+        // Handle keyboard input
+        let timeout = Duration::from_millis(10);
+        if crossterm::event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('r') => {
+                        // Reset statistics
+                        for hop in &mut session.hops {
+                            *hop = HopStats::new(hop.hop);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Cleanup
+    trace_handle.abort();
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
+// Channel-based network trace that sends events instead of using shared state
+async fn run_network_trace_with_events(
+    session: MtrSession, 
+    event_sender: mpsc::UnboundedSender<NetworkEvent>
+) -> Result<()> {
+    use std::sync::{Arc, Mutex};
+    
+    // Create a modified session that sends events via channel
+    let session_arc = Arc::new(Mutex::new(session));
+    
+    // Set up a callback that sends channel events when RTT updates arrive
+    {
+        let mut session_guard = session_arc.lock().unwrap();
+        let sender_clone = event_sender.clone();
+        session_guard.set_update_callback(Arc::new(move || {
+            // This callback is triggered, but we need to get the actual RTT data
+            // For now, just trigger UI updates - the data will be read from the mutex
+            // This is a hybrid approach while we transition to full channel architecture
+            let _ = sender_clone.send(NetworkEvent::RoundComplete { round: 0 });
+        }));
+    }
+    
+    // Run the existing mutex-based trace
+    MtrSession::run_trace_with_realtime_updates(session_arc).await
 }
 
 
