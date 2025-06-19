@@ -1,0 +1,45 @@
+# Maintainer: Edwin de Jong <edejong@fastmail.fm>
+pkgname=mtr-ng
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Modern My Traceroute with real-time network path visualization"
+arch=('x86_64' 'aarch64' 'armv7h')
+url="https://github.com/edejong-dbc/mtr-ng"
+license=('MIT' 'Apache')
+depends=('glibc')
+makedepends=('rust' 'cargo')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/edejong-dbc/$pkgname/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP') # This should be updated with actual checksum
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release --all-features
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --frozen --all-features
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    
+    # Install binary
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    
+    # Install man page
+    install -Dm644 "install/$pkgname.1" "$pkgdir/usr/share/man/man1/$pkgname.1"
+    
+    # Install documentation
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+} 

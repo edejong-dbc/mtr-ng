@@ -1,0 +1,206 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: |
+            Release ${{ steps.get_version.outputs.version }}
+            
+            ## Installation
+            
+            ### Quick Install (Unix/Linux/macOS)
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | bash
+            ```
+            
+            ### Homebrew (macOS)
+            ```bash
+            brew install mtr-ng
+            ```
+            
+            ### Cargo (Rust)
+            ```bash
+            cargo install mtr-ng
+            ```
+            
+            ### Manual Download
+            Download the appropriate binary for your platform from the assets below.
+            
+            ## Usage
+            ```bash
+            # Basic usage
+            sudo mtr-ng google.com
+            
+            # Show all metrics
+            sudo mtr-ng google.com --show-all
+            
+            # Generate report
+            mtr-ng google.com --report --count 10
+            ```
+          draft: false
+          prerelease: false
+
+  build-release:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-20.04
+            name: linux-x86_64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-20.04
+            name: linux-x86_64-musl
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-20.04
+            name: linux-aarch64
+          - target: x86_64-apple-darwin
+            os: macos-12
+            name: macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-12
+            name: macos-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            name: windows-x86_64
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create archive (Unix)
+        if: matrix.os != 'windows-2022'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf mtr-ng-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz mtr-ng
+          echo "ASSET=mtr-ng-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.tar.gz" >> $GITHUB_ENV
+
+      - name: Create archive (Windows)
+        if: matrix.os == 'windows-2022'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a mtr-ng-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip mtr-ng.exe
+          echo "ASSET=mtr-ng-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip" >> $env:GITHUB_ENV
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: target/${{ matrix.target }}/release/${{ env.ASSET }}
+          asset_name: ${{ env.ASSET }}
+          asset_content_type: application/octet-stream
+
+  build-packages:
+    needs: create-release
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential debhelper devscripts
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build DEB package
+        run: |
+          cargo deb
+          mv target/debian/*.deb ./mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
+
+      - name: Upload DEB package
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
+          asset_name: mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
+          asset_content_type: application/vnd.debian.binary-package
+
+  publish-crate:
+    needs: [create-release, build-release]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  update-homebrew:
+    needs: [create-release, build-release]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Update Homebrew formula
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: mtr-ng
+          formula-path: Formula/mtr-ng.rb
+          homebrew-tap: ${{ github.repository_owner }}/homebrew-tap
+          download-url: https://github.com/${{ github.repository }}/archive/v${{ needs.create-release.outputs.version }}.tar.gz
+          commit-message: |
+            mtr-ng ${{ needs.create-release.outputs.version }}
+            
+            Created by https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }} 

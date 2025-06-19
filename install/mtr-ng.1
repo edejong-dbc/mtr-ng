@@ -1,0 +1,145 @@
+.\" Man page for mtr-ng
+.TH MTR-NG 1 "2024" "mtr-ng 0.1.0" "User Commands"
+.SH NAME
+mtr-ng \- modern My Traceroute network diagnostic tool
+.SH SYNOPSIS
+.B mtr-ng
+[\fIOPTIONS\fR] \fIHOSTNAME\fR
+.SH DESCRIPTION
+\fBmtr-ng\fR is a modern implementation of My Traceroute (MTR) that combines the functionality of traceroute and ping in a single network diagnostic tool. It provides real-time network path visualization with Unicode sparklines, jitter analysis, and advanced column customization.
+
+MTR-NG sends packets with intentionally low TTLs to discover each hop along the network path to a destination, measuring packet loss and round-trip times for network analysis and troubleshooting.
+
+.SH OPTIONS
+.TP
+.B \-c, \-\-count \fINUM\fR
+Send NUM packets, then exit. Default is to run indefinitely in interactive mode.
+.TP
+.B \-r, \-\-report
+Generate report output instead of interactive mode. Suitable for automation and scripting.
+.TP
+.B \-i, \-\-interval \fISECONDS\fR
+Specify the interval between packets in seconds. Default is 1.0 seconds.
+.TP
+.B \-n, \-\-numeric
+Display IP addresses instead of hostnames. Skips hostname resolution for faster operation.
+.TP
+.B \-f, \-\-fields \fIFIELDS\fR
+Specify which columns to display. Available fields: hop, host, loss, sent, last, avg, ema, jitter, jitter-avg, best, worst, graph.
+.TP
+.B \-\-show\-all
+Display all available columns and metrics.
+.TP
+.B \-\-sixel
+Enable experimental Sixel graphics support for enhanced visualization.
+.TP
+.B \-\-sparkline\-scale \fISCALE\fR
+Set sparkline scaling mode: linear or logarithmic. Default is linear.
+.TP
+.B \-h, \-\-help
+Display help information and exit.
+.TP
+.B \-V, \-\-version
+Display version information and exit.
+
+.SH INTERACTIVE CONTROLS
+When running in interactive mode, the following keyboard controls are available:
+.TP
+.B q, Esc
+Quit the application
+.TP
+.B r
+Reset all statistics
+.TP
+.B s
+Toggle sparkline scale between linear and logarithmic
+.TP
+.B c
+Cycle through color modes (none, basic, extended, truecolor)
+.TP
+.B f
+Toggle column visibility and cycle through available fields
+.TP
+.B v
+Toggle visualization mode between sparkline and heatmap
+.TP
+.B h
+Toggle display between hostnames and IP addresses
+.TP
+.B ?
+Show/hide help overlay
+
+.SH EXAMPLES
+.TP
+.B mtr-ng google.com
+Start interactive trace to google.com with default settings
+.TP
+.B mtr-ng google.com \-\-show\-all
+Show all available metrics in interactive mode
+.TP
+.B mtr-ng google.com \-r \-c 10
+Generate a 10-packet report to google.com
+.TP
+.B mtr-ng 8.8.8.8 \-f hop,host,loss,avg,graph
+Custom column selection with sparkline visualization
+.TP
+.B mtr-ng example.com \-n \-i 0.5
+Numeric mode with 0.5 second intervals
+
+.SH OUTPUT COLUMNS
+.TP
+.B hop
+Hop number in the network path
+.TP
+.B host
+Hostname or IP address of the hop
+.TP
+.B loss
+Packet loss percentage for this hop
+.TP
+.B sent
+Number of packets sent to this hop
+.TP
+.B last
+Most recent round-trip time
+.TP
+.B avg
+Average round-trip time
+.TP
+.B ema
+Exponential moving average of round-trip times
+.TP
+.B jitter
+Most recent jitter (RTT variation)
+.TP
+.B jitter-avg
+Average jitter over time
+.TP
+.B best
+Best (minimum) round-trip time observed
+.TP
+.B worst
+Worst (maximum) round-trip time observed
+.TP
+.B graph
+Unicode sparkline showing RTT history
+
+.SH NOTES
+MTR-NG requires appropriate privileges to send raw packets. On most systems, this means running with sudo or as root.
+
+The sparkline visualization uses Unicode block characters (▁▂▃▄▅▆▇█) to show RTT trends over time with color coding for performance analysis.
+
+.SH AUTHOR
+Written by the mtr-ng contributors.
+
+.SH REPORTING BUGS
+Report bugs to: https://github.com/edejong-dbc/mtr-ng/issues
+
+.SH COPYRIGHT
+Copyright (c) 2024 mtr-ng contributors.
+License: MIT OR Apache-2.0
+
+.SH SEE ALSO
+.BR mtr (8),
+.BR traceroute (8),
+.BR ping (8) 

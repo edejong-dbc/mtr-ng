@@ -1,0 +1,27 @@
+Source: mtr-ng
+Section: net
+Priority: optional
+Maintainer: Edwin de Jong <edejong@fastmail.fm>
+Build-Depends: debhelper-compat (= 13), cargo, rustc
+Standards-Version: 4.6.0
+Homepage: https://github.com/edejong-dbc/mtr-ng
+Vcs-Git: https://github.com/edejong-dbc/mtr-ng.git
+Vcs-Browser: https://github.com/edejong-dbc/mtr-ng
+
+Package: mtr-ng
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Modern My Traceroute with real-time network path visualization
+ MTR-NG is a modern implementation of the My Traceroute (MTR) network diagnostic
+ tool. It combines the functionality of traceroute and ping in a single tool with
+ beautiful Unicode sparklines, real-time visualization, jitter analysis, and
+ advanced column customization. Perfect for network troubleshooting and monitoring.
+ .
+ Key features:
+  * Real-time network path discovery and monitoring
+  * RTT statistics with min/max/average/EMA calculations
+  * Packet loss detection and jitter analysis
+  * Unicode sparklines for RTT history visualization
+  * Color-coded metrics and customizable columns
+  * Interactive UI with keyboard controls
+  * Report mode for automation and scripting 

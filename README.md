@@ -37,14 +37,45 @@ A modern, feature-rich implementation of My Traceroute (MTR) built in Rust, offe
 
 ## Installation
 
+### Quick Install (Recommended)
+```bash
+# Unix/Linux/macOS one-liner
+curl -sSL https://raw.githubusercontent.com/edejong-dbc/mtr-ng/main/install/install.sh | bash
+```
+
+### Package Managers
+
+#### Homebrew (macOS)
+```bash
+brew install mtr-ng
+```
+
+#### Cargo (Rust)
+```bash
+cargo install mtr-ng
+```
+
+#### Arch Linux (AUR)
+```bash
+yay -S mtr-ng
+```
+
+#### Debian/Ubuntu
+Download the `.deb` package from [releases](https://github.com/edejong-dbc/mtr-ng/releases):
+```bash
+sudo dpkg -i mtr-ng_*.deb
+```
+
+### From Source
 ```bash
 # Clone and build
-git clone https://github.com/yourusername/mtr-ng
+git clone https://github.com/edejong-dbc/mtr-ng
 cd mtr-ng
 cargo build --release
 
-# Run
-sudo ./target/release/mtr-ng google.com
+# Install
+sudo cp target/release/mtr-ng /usr/local/bin/
+sudo cp install/mtr-ng.1 /usr/local/share/man/man1/
 ```
 
 ## Usage Examples
