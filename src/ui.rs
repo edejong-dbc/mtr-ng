@@ -43,6 +43,7 @@ pub struct UiState {
     pub sixel_renderer: SixelRenderer,
     pub show_help: bool,
     pub visualization_mode: VisualizationMode,
+    pub show_hostnames: bool, // Toggle between hostnames and IP addresses
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +70,7 @@ impl UiState {
             sixel_renderer: SixelRenderer::new(enable_sixel),
             show_help: false,
             visualization_mode: VisualizationMode::Sparkline,
+            show_hostnames: true, // Start with hostnames enabled by default
         }
     }
 
@@ -81,6 +83,10 @@ impl UiState {
             VisualizationMode::Sparkline => VisualizationMode::Heatmap,
             VisualizationMode::Heatmap => VisualizationMode::Sparkline,
         };
+    }
+
+    pub fn toggle_hostnames(&mut self) {
+        self.show_hostnames = !self.show_hostnames;
     }
 
     pub fn toggle_sparkline_scale(&mut self) {
@@ -522,8 +528,8 @@ fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
             Column::Hop => Constraint::Length(3),
             Column::Host => {
                 if has_graph { 
-                    // Use 30% of available space when graph is present
-                    Constraint::Percentage(30) 
+                    // Use 20% of available space when graph is present
+                    Constraint::Percentage(20) 
                 } else { 
                     Constraint::Min(15) 
                 }
@@ -536,7 +542,7 @@ fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
             Column::Jitter | Column::JitterAvg => {
                 if has_graph { Constraint::Length(6) } else { Constraint::Length(9) }
             }
-            Column::Graph => Constraint::Percentage(70), // Use 70% of available space
+            Column::Graph => Constraint::Percentage(80), // Use 80% of available space
         }
     }).collect()
 }
@@ -566,9 +572,11 @@ fn create_status_text(session: &MtrSession, ui_state: &UiState) -> Line<'static>
         VisualizationMode::Heatmap => "Heatmap",
     };
 
+    let hostname_mode = if ui_state.show_hostnames { "Hostnames" } else { "IPs" };
+    
     let main_text = format!(
-        "mtr-ng: {} → {} | Hops: {} | Sent: {} | Loss: {:.1}% | Scale: {} | Mode: {}",
-        session.target, session.target_addr, active_hops, total_sent, overall_loss, scale_name, viz_mode
+        "mtr-ng: {} → {} | Hops: {} | Sent: {} | Loss: {:.1}% | Scale: {} | Mode: {} | Display: {}",
+        session.target, session.target_addr, active_hops, total_sent, overall_loss, scale_name, viz_mode, hostname_mode
     );
 
     Line::from(vec![
@@ -610,6 +618,10 @@ fn create_help_overlay() -> Paragraph<'static> {
         Line::from(vec![
             Span::styled("v", Style::default().fg(Color::Green)),
             Span::raw("        - Toggle visualization (Sparkline/Heatmap)"),
+        ]),
+        Line::from(vec![
+            Span::styled("h", Style::default().fg(Color::Green)),
+            Span::raw("        - Toggle hostnames/IP addresses"),
         ]),
         Line::from(vec![
             Span::styled("?", Style::default().fg(Color::Green)),
@@ -796,7 +808,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .iter()
         .filter(|hop| hop.sent > 0)
         .map(|hop| {
-            let hostname = format_hostname(session, hop);
+            let hostname = format_hostname(session, hop, ui_state);
             let graph_width = calculate_graph_width(&chunks[1], &ui_state.columns);
             
             let graph_spans = match ui_state.visualization_mode {
@@ -874,19 +886,20 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     }
 }
 
-fn format_hostname(session: &MtrSession, hop: &HopStats) -> String {
-    let hostname = if session.args.numeric {
+fn format_hostname(session: &MtrSession, hop: &HopStats, ui_state: &UiState) -> String {
+    let hostname = if session.args.numeric || !ui_state.show_hostnames {
+        // Show IP addresses when numeric mode or hostname toggle is off
         hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
     } else {
+        // Show hostnames when available, fallback to IP
         hop.hostname.clone().unwrap_or_else(|| {
             hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
         })
     };
 
-    // With 30% width allocation, we can show longer hostnames (up to ~40 chars on wide terminals)
-    // Truncate only if really long to fit in most reasonable cases
-    if hostname.len() > 45 {
-        format!("{}...", &hostname[..42])
+    // With 20% width allocation, truncate longer hostnames appropriately
+    if hostname.len() > 35 {
+        format!("{}...", &hostname[..32])
     } else {
         hostname
     }
@@ -894,7 +907,7 @@ fn format_hostname(session: &MtrSession, hop: &HopStats) -> String {
 
 fn calculate_graph_width(table_area: &Rect, columns: &[Column]) -> usize {
     if columns.contains(&Column::Graph) {
-        // Calculate actual width available for graph column (70% of remaining space)
+        // Calculate actual width available for graph column (80% of remaining space)
         let total_width = table_area.width.saturating_sub(4) as usize; // Account for borders
         
         // Calculate space used by fixed-width columns
@@ -909,9 +922,9 @@ fn calculate_graph_width(table_area: &Rect, columns: &[Column]) -> usize {
             }
         }).sum();
         
-        // Remaining space for Host (30%) and Graph (70%) columns
+        // Remaining space for Host (20%) and Graph (80%) columns
         let remaining_width = total_width.saturating_sub(fixed_width);
-        let graph_width = (remaining_width * 70) / 100;
+        let graph_width = (remaining_width * 80) / 100;
         
         // Ensure minimum usable width but no upper cap
         graph_width.max(20)
@@ -989,6 +1002,7 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
                     KeyCode::Char('c') => ui_state.cycle_color_mode(),
                     KeyCode::Char('f') => ui_state.toggle_column(),
                     KeyCode::Char('v') => ui_state.toggle_visualization_mode(),
+                    KeyCode::Char('h') => ui_state.toggle_hostnames(),
                     KeyCode::Char('?') => ui_state.toggle_help(),
                     _ => {}
                 }
