@@ -116,6 +116,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
+      - name: Install Npcap SDK (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: powershell
+        run: |
+          # Download and install Npcap SDK
+          Write-Host "Downloading Npcap SDK..."
+          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.13.zip" -OutFile "npcap-sdk.zip"
+          Expand-Archive -Path "npcap-sdk.zip" -DestinationPath "npcap-sdk"
+          
+          # Set up environment variables for the build
+          $sdkPath = "$pwd\npcap-sdk"
+          echo "NPCAP_SDK=$sdkPath" >> $env:GITHUB_ENV
+          echo "LIB=$env:LIB;$sdkPath\Lib\x64" >> $env:GITHUB_ENV
+          echo "INCLUDE=$env:INCLUDE;$sdkPath\Include" >> $env:GITHUB_ENV
+          
+          Write-Host "Npcap SDK installed to: $sdkPath"
+          Write-Host "Libraries available:"
+          Get-ChildItem "$sdkPath\Lib\x64" -Name
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
