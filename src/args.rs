@@ -73,17 +73,17 @@ impl Column {
     pub fn header(&self) -> &'static str {
         match self {
             Column::Hop => "",
-            Column::Host => "Host",
+            Column::Host => "Hostname",
             Column::Loss => "Loss%",
-            Column::Sent => "Snt",
-            Column::Last => "Last",
-            Column::Avg => "Avg",
-            Column::Ema => "EMA",
-            Column::Jitter => "Jttr",
-            Column::JitterAvg => "JAvg",
-            Column::Best => "Best",
-            Column::Worst => "Wrst",
-            Column::Graph => "RTT Graph",
+            Column::Sent => "Pkts",
+            Column::Last => "LastRTT",
+            Column::Avg => "AvgRTT",
+            Column::Ema => "EmaRTT",
+            Column::Jitter => "Jitter",
+            Column::JitterAvg => "JitAvg",
+            Column::Best => "BestRTT",
+            Column::Worst => "WorstRTT",
+            Column::Graph => "RTT History",
         }
     }
 
