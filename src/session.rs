@@ -1,5 +1,6 @@
 use crate::{Args, HopStats, Result};
 use anyhow::anyhow;
+use hickory_resolver::{config::*, TokioAsyncResolver};
 use pnet::packet::{
     icmp::{IcmpPacket, IcmpType, IcmpTypes},
     ip::IpNextHeaderProtocols,
@@ -17,7 +18,6 @@ use std::{
 };
 use tokio::time;
 use tracing::{debug, info, warn};
-use hickory_resolver::{config::*, TokioAsyncResolver};
 
 const MIN_SEQUENCE: u16 = 33000;
 const MAX_SEQUENCE: u16 = 65535;
