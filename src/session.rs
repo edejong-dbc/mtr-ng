@@ -388,7 +388,16 @@ impl MtrSession {
             self.hops[index].addr = Some(IpAddr::V4(addr));
 
             if !self.args.numeric {
-                self.hops[index].hostname = Some(addr.to_string());
+                // Perform reverse DNS lookup
+                if let Ok(names) = self.resolver.reverse_lookup(IpAddr::V4(addr)).await {
+                    if let Some(name) = names.iter().next() {
+                        self.hops[index].hostname = Some(name.to_string().trim_end_matches('.').to_string());
+                    } else {
+                        self.hops[index].hostname = Some(addr.to_string());
+                    }
+                } else {
+                    self.hops[index].hostname = Some(addr.to_string());
+                }
             }
         }
 
@@ -862,7 +871,7 @@ impl MtrSession {
         receive_time: Instant,
         target: Ipv4Addr,
     ) {
-        let callback = {
+        let (callback, hop_index) = {
             let mut session = session_arc.lock().unwrap();
 
             let (index, send_time) = match session.mark_sequence_complete(seq) {
@@ -892,6 +901,7 @@ impl MtrSession {
                 session.hops[index].addr = Some(IpAddr::V4(addr));
 
                 if !session.args.numeric {
+                    // Set temporary IP address as hostname, will be resolved later
                     session.hops[index].hostname = Some(addr.to_string());
                 }
             }
@@ -901,8 +911,47 @@ impl MtrSession {
                 info!("Reached target {} at hop {}", target, index + 1);
             }
 
-            session.update_callback.clone()
+            (session.update_callback.clone(), index)
         };
+
+        // Spawn reverse DNS lookup task to avoid blocking
+        let session_arc_clone = Arc::clone(session_arc);
+        let addr_for_dns = addr;
+        tokio::spawn(async move {
+            let (do_resolve, resolver_clone) = {
+                let session = session_arc_clone.lock().unwrap();
+                if !session.args.numeric {
+                    if let Some(hostname) = &session.hops[hop_index].hostname {
+                        // Check if hostname is just the IP address (needs resolution)
+                        if hostname == &addr_for_dns.to_string() {
+                            (true, session.resolver.clone())
+                        } else {
+                            (false, session.resolver.clone())
+                        }
+                    } else {
+                        (false, session.resolver.clone())
+                    }
+                } else {
+                    (false, session.resolver.clone())
+                }
+            };
+
+            if do_resolve {
+                if let Ok(names) = resolver_clone.reverse_lookup(IpAddr::V4(addr_for_dns)).await {
+                    if let Some(name) = names.iter().next() {
+                        let mut session = session_arc_clone.lock().unwrap();
+                        session.hops[hop_index].hostname = Some(name.to_string().trim_end_matches('.').to_string());
+                        
+                        // Trigger UI update after hostname resolution
+                        if let Some(callback) = &session.update_callback {
+                            callback();
+                        }
+                    }
+                }
+            }
+        });
+
+
 
         // Trigger real-time UI update when a response arrives (outside lock)
         if let Some(callback) = callback {
