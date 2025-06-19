@@ -513,7 +513,7 @@ fn create_table_cells(
     }).collect()
 }
 
-/// Generate column constraints
+/// Generate column constraints with dynamic sizing for Host and Graph columns
 fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
     let has_graph = columns.iter().any(|col| matches!(col, Column::Graph));
     
@@ -521,7 +521,12 @@ fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
         match column {
             Column::Hop => Constraint::Length(3),
             Column::Host => {
-                if has_graph { Constraint::Length(15) } else { Constraint::Min(15) }
+                if has_graph { 
+                    // Use 30% of available space when graph is present
+                    Constraint::Percentage(30) 
+                } else { 
+                    Constraint::Min(15) 
+                }
             }
             Column::Loss => Constraint::Length(5),
             Column::Sent => Constraint::Length(3),
@@ -531,7 +536,7 @@ fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
             Column::Jitter | Column::JitterAvg => {
                 if has_graph { Constraint::Length(6) } else { Constraint::Length(9) }
             }
-            Column::Graph => Constraint::Percentage(40),
+            Column::Graph => Constraint::Percentage(70), // Use 70% of available space
         }
     }).collect()
 }
@@ -878,8 +883,10 @@ fn format_hostname(session: &MtrSession, hop: &HopStats) -> String {
         })
     };
 
-    if hostname.len() > 20 {
-        format!("{}...", &hostname[..17])
+    // With 30% width allocation, we can show longer hostnames (up to ~40 chars on wide terminals)
+    // Truncate only if really long to fit in most reasonable cases
+    if hostname.len() > 45 {
+        format!("{}...", &hostname[..42])
     } else {
         hostname
     }
@@ -887,9 +894,27 @@ fn format_hostname(session: &MtrSession, hop: &HopStats) -> String {
 
 fn calculate_graph_width(table_area: &Rect, columns: &[Column]) -> usize {
     if columns.contains(&Column::Graph) {
-        let available_width = table_area.width.saturating_sub(4) as usize;
-        let estimated_width = (available_width * 40) / 100;
-        estimated_width.clamp(20, 80)
+        // Calculate actual width available for graph column (70% of remaining space)
+        let total_width = table_area.width.saturating_sub(4) as usize; // Account for borders
+        
+        // Calculate space used by fixed-width columns
+        let fixed_width: usize = columns.iter().map(|col| {
+            match col {
+                Column::Hop => 3,
+                Column::Loss => 5,
+                Column::Sent => 3,
+                Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => 6,
+                Column::Jitter | Column::JitterAvg => 6,
+                Column::Host | Column::Graph => 0, // These use percentage-based sizing
+            }
+        }).sum();
+        
+        // Remaining space for Host (30%) and Graph (70%) columns
+        let remaining_width = total_width.saturating_sub(fixed_width);
+        let graph_width = (remaining_width * 70) / 100;
+        
+        // Ensure minimum usable width but no upper cap
+        graph_width.max(20)
     } else {
         20
     }
