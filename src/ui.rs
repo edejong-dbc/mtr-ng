@@ -815,7 +815,7 @@ fn create_scale_widget(
 ///
 /// The function also handles the help overlay when toggled by the user.
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
-    let area = f.size();
+    let area = f.area();
 
     // Minimum size check
     if area.height < 10 || area.width < 50 {
@@ -905,7 +905,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     });
 
     let constraints = create_column_constraints(&ui_state.columns);
-    let table = Table::new(rows).header(header).widths(&constraints);
+    let table = Table::new(rows, &constraints).header(header);
 
     // Use enhanced table for Sixel support
     if ui_state.sixel_renderer.enabled {
@@ -927,7 +927,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 
     // Show help overlay if enabled
     if ui_state.show_help {
-        let area = f.size();
+        let area = f.area();
         // Center the help overlay
         let help_width = 50.min(area.width.saturating_sub(4));
         let help_height = 12.min(area.height.saturating_sub(4));

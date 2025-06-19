@@ -52,10 +52,10 @@ assets = [
 
 [dependencies]
 # Command line argument parsing
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 
 # Async runtime and networking
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.45", features = ["full"] }
 tokio-util = "0.7"
 
 # Network operations
@@ -63,9 +63,9 @@ socket2 = "0.5"
 pnet = "0.34"
 
 # Terminal UI and graphics
-crossterm = "0.27"
-ratatui = "0.24"
-unicode-width = "0.1"
+crossterm = "0.28"
+ratatui = "0.29"
+unicode-width = "0.2"
 
 # Data structures and utilities
 serde = { version = "1.0", features = ["derive"] }
@@ -86,8 +86,8 @@ rand = "0.8"
 # Raw socket operations
 libc = "0.2"
 
-# DNS resolution
-trust-dns-resolver = "0.23"
+# DNS resolution - migrated from trust-dns (unmaintained) to hickory-dns
+hickory-resolver = "0.24"
 
 # Sixel graphics (manual implementation)
 

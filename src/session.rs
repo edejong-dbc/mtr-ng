@@ -17,7 +17,7 @@ use std::{
 };
 use tokio::time;
 use tracing::{debug, info, warn};
-use trust_dns_resolver::{config::*, TokioAsyncResolver};
+use hickory_resolver::{config::*, TokioAsyncResolver};
 
 const MIN_SEQUENCE: u16 = 33000;
 const MAX_SEQUENCE: u16 = 65535;
