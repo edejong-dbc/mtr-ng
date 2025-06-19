@@ -4,19 +4,19 @@ A modern, feature-rich implementation of My Traceroute (MTR) built in Rust, offe
 
 ## Features
 
-### 🎯 **Core Network Analysis**
+### Core Network Analysis
 - **Real-time Path Tracing**: Live network path discovery and monitoring
 - **RTT Statistics**: Min/Max/Average/EMA (Exponential Moving Average) calculations  
 - **Packet Loss Detection**: Accurate loss percentage tracking per hop
 - **Jitter Analysis**: Last jitter and average jitter measurements for network stability
 
-### 📊 **Advanced Visualization**
+### Advanced Visualization
 - **Unicode Sparklines**: Beautiful real-time RTT history visualization (`▁▂▂▆█▄▂▃▂▁`)
 - **Color-coded Metrics**: Green (good) → Yellow (warning) → Red (problematic)
 - **Customizable Columns**: Select exactly which metrics to display
 - **Scalable Display**: Auto-scaling sparklines with manual override options
 
-### 🎛️ **Column Selection System**
+### Column Selection System
 - **Flexible Fields**: Choose from 12 available metrics
   - `hop`, `host`, `loss`, `sent`, `last`, `avg`, `ema`
   - `jitter`, `jitter-avg`, `best`, `worst`, `graph`
@@ -24,12 +24,12 @@ A modern, feature-rich implementation of My Traceroute (MTR) built in Rust, offe
 - **Interactive Toggle**: Press `f` key in interactive mode to cycle columns
 - **Report Mode**: Same column selection works for both interactive and report output
 
-### 🖥️ **Interface Modes**
+### Interface Modes
 - **Interactive UI**: Real-time terminal interface with keyboard controls
 - **Report Mode**: Clean output for automation and scripting
 - **Colorblind Friendly**: Accessible color schemes for all users
 
-### 🚀 **Performance & Compatibility**
+### Performance & Compatibility
 - **Efficient Async**: Built with Tokio for high-performance networking
 - **Cross-platform**: Works on Linux, macOS, and Windows
 - **IPv4 Support**: Robust IP address handling and DNS resolution
@@ -157,12 +157,12 @@ MTR-NG includes experimental Sixel graphics support:
 ## Development Status
 
 MTR-NG is actively developed with focus on:
-- ✅ **Stable Core**: Reliable network tracing and statistics
-- ✅ **Rich Visualization**: Unicode sparklines and color coding  
-- ✅ **Column Flexibility**: Complete customization system
-- ✅ **Interactive UI**: Real-time monitoring with controls
-- 🔄 **Sixel Graphics**: Advanced terminal graphics (experimental)
-- 🔄 **IPv6 Support**: Next-generation protocol support (planned)
+- **Stable Core**: Reliable network tracing and statistics
+- **Rich Visualization**: Unicode sparklines and color coding  
+- **Column Flexibility**: Complete customization system
+- **Interactive UI**: Real-time monitoring with controls
+- **Sixel Graphics**: Advanced terminal graphics (experimental)
+- **IPv6 Support**: Next-generation protocol support (planned)
 
 ## Contributing
 
