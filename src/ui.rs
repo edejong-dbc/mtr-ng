@@ -588,7 +588,13 @@ fn create_table_cells(
         .iter()
         .map(|column| {
             match column {
-                Column::Hop => Cell::from(format!("{:>2}", hop.hop)),
+                Column::Hop => {
+                    if hop.has_multiple_paths() {
+                        Cell::from(format!("{:>1}*", hop.hop))
+                    } else {
+                        Cell::from(format!("{:>2}", hop.hop))
+                    }
+                }
                 Column::Host => Cell::from(hostname.to_owned()),
                 Column::Loss => {
                     let loss_pct = hop.loss_percent;
@@ -676,10 +682,10 @@ fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
                 Column::Hop => Constraint::Length(3),
                 Column::Host => {
                     if has_graph {
-                        // Use 20% of available space when graph is present
-                        Constraint::Percentage(20)
+                        // Use 35% of available space when graph is present (increased for multi-path)
+                        Constraint::Percentage(35)
                     } else {
-                        Constraint::Min(15)
+                        Constraint::Min(20)
                     }
                 }
                 Column::Loss => Constraint::Length(5),
@@ -698,7 +704,7 @@ fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
                         Constraint::Length(9)
                     }
                 }
-                Column::Graph => Constraint::Percentage(80), // Use 80% of available space
+                Column::Graph => Constraint::Percentage(65), // Use 65% of available space (reduced to accommodate larger hostname column)
             }
         })
         .collect()
@@ -1089,7 +1095,9 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 
     let header = Row::new(header_cells).style(Style::default().fg(Color::Yellow));
 
-    let rows = session.hops.iter().filter(|hop| hop.sent > 0).map(|hop| {
+    let mut rows = Vec::new();
+
+    for hop in session.hops.iter().filter(|hop| hop.sent > 0) {
         let hostname = format_hostname(session, hop, ui_state);
         let graph_width = calculate_graph_width(&chunks[1], &ui_state.columns);
 
@@ -1120,8 +1128,57 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
             ui_state.sixel_renderer.enabled,
         );
 
-        Row::new(cells)
-    });
+        rows.push(Row::new(cells));
+
+        // Add alternate paths if multi-path is detected
+        if hop.has_multiple_paths() {
+            for alt_path in hop.get_alternate_paths() {
+                let percentage = hop.get_path_percentage(alt_path);
+
+                // Format hostname with proper length, including percentage
+                let alt_hostname = if let Some(hostname) = &alt_path.hostname {
+                    let full_name =
+                        format!("  ↳ {} ({}) ({:.0}%)", hostname, alt_path.addr, percentage);
+                    if full_name.len() > 50 {
+                        format!(
+                            "  ↳ {}...{} ({:.0}%)",
+                            &hostname[..15],
+                            alt_path.addr,
+                            percentage
+                        )
+                    } else {
+                        full_name
+                    }
+                } else {
+                    format!("  ↳ {} ({:.0}%)", alt_path.addr, percentage)
+                };
+
+                let alt_rtt = alt_path.last_rtt.unwrap_or_default().as_secs_f64() * 1000.0;
+
+                // Create cells for each column, focusing on key info
+                let mut alt_cells = Vec::new();
+                for column in &ui_state.columns {
+                    match column {
+                        Column::Hop => alt_cells.push(Cell::from("")),
+                        Column::Host => alt_cells.push(Cell::from(alt_hostname.clone())),
+                        Column::Loss => alt_cells.push(Cell::from("")), // Empty - percentage is now in hostname
+                        Column::Sent => alt_cells.push(Cell::from("")),
+                        Column::Last => alt_cells.push(Cell::from(format!("{:.1}", alt_rtt))),
+                        Column::Avg => alt_cells.push(Cell::from("")),
+                        Column::Ema => alt_cells.push(Cell::from("")),
+                        Column::Best => alt_cells.push(Cell::from("")),
+                        Column::Worst => alt_cells.push(Cell::from("")),
+                        Column::Jitter => alt_cells.push(Cell::from("")),
+                        Column::JitterAvg => alt_cells.push(Cell::from("")),
+                        Column::Graph => alt_cells.push(Cell::from("")),
+                    }
+                }
+
+                let alt_row = Row::new(alt_cells);
+                rows.push(alt_row);
+            }
+        }
+    }
 
     let constraints = create_column_constraints(&ui_state.columns);
     let table = Table::new(rows, &constraints).header(header);
@@ -1192,7 +1249,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 }
 
 fn format_hostname(session: &MtrSession, hop: &HopStats, ui_state: &UiState) -> String {
-    let hostname = if session.args.numeric || !ui_state.show_hostnames {
+    let base_hostname = if session.args.numeric || !ui_state.show_hostnames {
         // Show IP addresses when numeric mode or hostname toggle is off
         hop.addr
             .map(|a| a.to_string())
@@ -1206,9 +1263,21 @@ fn format_hostname(session: &MtrSession, hop: &HopStats, ui_state: &UiState) -> 
         })
     };
 
+    // Add primary path percentage if multi-path
+    let hostname = if hop.has_multiple_paths() {
+        if hop.addr.is_some() {
+            let primary_percentage = hop.get_primary_path_percentage();
+            format!("{} ({:.0}%)", base_hostname, primary_percentage)
+        } else {
+            base_hostname
+        }
+    } else {
+        base_hostname
+    };
+
     // With 20% width allocation, truncate longer hostnames appropriately
-    const MAX_HOSTNAME_LEN: usize = 35;
-    const TRUNCATED_LEN: usize = 32;
+    const MAX_HOSTNAME_LEN: usize = 40; // Increased to accommodate percentage
+    const TRUNCATED_LEN: usize = 37;
 
     if hostname.len() > MAX_HOSTNAME_LEN {
         format!("{}...", &hostname[..TRUNCATED_LEN])
@@ -1237,9 +1306,9 @@ fn calculate_graph_width(table_area: &Rect, columns: &[Column]) -> usize {
             })
             .sum();
 
-        // Remaining space for Host (20%) and Graph (80%) columns
+        // Remaining space for Host (35%) and Graph (65%) columns
         let remaining_width = total_width.saturating_sub(fixed_width);
-        let graph_width = (remaining_width * 80) / 100;
+        let graph_width = (remaining_width * 65) / 100;
 
         // Ensure minimum usable width but no upper cap
         graph_width.max(20)

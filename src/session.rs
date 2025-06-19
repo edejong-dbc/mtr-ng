@@ -380,25 +380,22 @@ impl MtrSession {
             rtt.as_secs_f64() * 1000.0
         );
 
-        // Update hop statistics (like original mtr)
-        self.hops[index].add_rtt(rtt);
+        // Update hop statistics with multi-path tracking
+        self.hops[index].add_rtt_from_addr(IpAddr::V4(addr), rtt);
 
-        // Set hop address if not already set
-        if self.hops[index].addr.is_none() {
-            self.hops[index].addr = Some(IpAddr::V4(addr));
-
-            if !self.args.numeric {
-                // Perform reverse DNS lookup
-                if let Ok(names) = self.resolver.reverse_lookup(IpAddr::V4(addr)).await {
-                    if let Some(name) = names.iter().next() {
-                        self.hops[index].hostname =
-                            Some(name.to_string().trim_end_matches('.').to_string());
-                    } else {
-                        self.hops[index].hostname = Some(addr.to_string());
-                    }
+        // Perform DNS lookup for this specific address if needed
+        if !self.args.numeric {
+            if let Ok(names) = self.resolver.reverse_lookup(IpAddr::V4(addr)).await {
+                if let Some(name) = names.iter().next() {
+                    self.hops[index].set_hostname_for_addr(
+                        IpAddr::V4(addr),
+                        name.to_string().trim_end_matches('.').to_string(),
+                    );
                 } else {
-                    self.hops[index].hostname = Some(addr.to_string());
+                    self.hops[index].set_hostname_for_addr(IpAddr::V4(addr), addr.to_string());
                 }
+            } else {
+                self.hops[index].set_hostname_for_addr(IpAddr::V4(addr), addr.to_string());
             }
         }
 
@@ -991,7 +988,73 @@ impl MtrSession {
 
                         if rand::random::<f64>() > packet_loss_chance {
                             let rtt = Duration::from_millis(base_latency + jitter);
-                            hop.add_rtt(rtt);
+
+                            // Simulate multi-path for certain hops
+                            let addr = match hop_num {
+                                3 => {
+                                    // Hop 3: Load balancing - randomly use different IPs
+                                    let rand_choice = rand::random::<f32>();
+                                    if rand_choice < 0.6 {
+                                        Ipv4Addr::new(10, 0, 3, 1) // Primary 60%
+                                    } else if rand_choice < 0.8 {
+                                        Ipv4Addr::new(10, 0, 3, 2) // Alt 1: 20%
+                                    } else {
+                                        Ipv4Addr::new(10, 0, 3, 3) // Alt 2: 20%
+                                    }
+                                }
+                                5 => {
+                                    // Hop 5: ECMP routing - two paths
+                                    if rand::random::<bool>() {
+                                        Ipv4Addr::new(8, 8, 8, 8) // Primary
+                                    } else {
+                                        Ipv4Addr::new(8, 8, 4, 4) // Alt
+                                    }
+                                }
+                                _ => {
+                                    // Use deterministic IP for other hops
+                                    match hop_num {
+                                        1 => Ipv4Addr::new(192, 168, 1, 1),
+                                        2 => Ipv4Addr::new(10, 0, 2, 1),
+                                        4 => Ipv4Addr::new(172, 16, 4, 1),
+                                        6 => Ipv4Addr::new(8, 8, 8, 8),
+                                        7 => Ipv4Addr::new(8, 8, 8, 8),
+                                        8 => Ipv4Addr::new(8, 8, 8, 8),
+                                        _ => Ipv4Addr::new(10, 0, hop_num as u8, 1),
+                                    }
+                                }
+                            };
+
+                            hop.add_rtt_from_addr(IpAddr::V4(addr), rtt);
+
+                            // Set hostnames for multi-path demo
+                            if !numeric {
+                                let hostname = match addr {
+                                    a if a == Ipv4Addr::new(192, 168, 1, 1) => {
+                                        "gateway.local".to_string()
+                                    }
+                                    a if a == Ipv4Addr::new(10, 0, 2, 1) => {
+                                        "core-2.isp.net".to_string()
+                                    }
+                                    a if a == Ipv4Addr::new(10, 0, 3, 1) => {
+                                        "core-3.isp.net".to_string()
+                                    }
+                                    a if a == Ipv4Addr::new(10, 0, 3, 2) => {
+                                        "alt-router-3-2.isp.net".to_string()
+                                    }
+                                    a if a == Ipv4Addr::new(10, 0, 3, 3) => {
+                                        "backup-router-3-3.isp.net".to_string()
+                                    }
+                                    a if a == Ipv4Addr::new(172, 16, 4, 1) => {
+                                        "border-4.isp.net".to_string()
+                                    }
+                                    a if a == Ipv4Addr::new(8, 8, 8, 8) => "dns.google".to_string(),
+                                    a if a == Ipv4Addr::new(8, 8, 4, 4) => {
+                                        "dns-alt.google".to_string()
+                                    }
+                                    _ => addr.to_string(),
+                                };
+                                hop.set_hostname_for_addr(IpAddr::V4(addr), hostname);
+                            }
 
                             // Simulate realistic IP addresses and hostnames
                             if hop.addr.is_none() {

@@ -1,10 +1,45 @@
-use std::{collections::VecDeque, net::IpAddr, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 
 #[derive(Debug, Clone)]
 pub enum PacketOutcome {
     Received(Duration), // RTT
     Lost,               // Timeout/no response
     Pending,            // Sent but no response yet
+}
+
+#[derive(Debug, Clone)]
+pub struct AlternatePath {
+    pub addr: IpAddr,
+    pub hostname: Option<String>,
+    pub frequency: usize,
+    pub last_seen: Instant,
+    pub last_rtt: Option<Duration>,
+    pub avg_rtt: Option<Duration>,
+}
+
+impl AlternatePath {
+    pub fn new(addr: IpAddr) -> Self {
+        Self {
+            addr,
+            hostname: None,
+            frequency: 1,
+            last_seen: Instant::now(),
+            last_rtt: None,
+            avg_rtt: None,
+        }
+    }
+
+    pub fn update(&mut self, rtt: Duration) {
+        self.frequency += 1;
+        self.last_seen = Instant::now();
+        self.last_rtt = Some(rtt);
+        // Simple running average
+        self.avg_rtt = Some(rtt);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +65,10 @@ pub struct HopStats {
     // Lower values = more stable, less sensitive to spikes
     // Typical values: 0.1-0.3 for network monitoring
     pub ema_alpha: f64,
+
+    // Multi-path tracking
+    pub alternate_paths: HashMap<IpAddr, AlternatePath>,
+    pub path_frequency: HashMap<IpAddr, usize>,
 }
 
 impl HopStats {
@@ -52,6 +91,104 @@ impl HopStats {
             packet_history: VecDeque::with_capacity(100),
             loss_percent: 0.0,
             ema_alpha: 0.1,
+            alternate_paths: HashMap::new(),
+            path_frequency: HashMap::new(),
+        }
+    }
+
+    /// Track an RTT from a specific address, handling multi-path logic
+    pub fn add_rtt_from_addr(&mut self, addr: IpAddr, rtt: Duration) {
+        // Update path frequency tracking
+        *self.path_frequency.entry(addr).or_insert(0) += 1;
+
+        // Determine if this is the primary path
+        let is_primary = self.addr.is_none()
+            || self.addr == Some(addr)
+            || self.path_frequency.get(&addr).unwrap_or(&0)
+                > self
+                    .path_frequency
+                    .get(&self.addr.unwrap_or(addr))
+                    .unwrap_or(&0);
+
+        if is_primary {
+            // Update primary path stats
+            self.addr = Some(addr);
+            self.add_rtt(rtt);
+        } else {
+            // Track as alternate path
+            let alt_path = self
+                .alternate_paths
+                .entry(addr)
+                .or_insert_with(|| AlternatePath::new(addr));
+            alt_path.update(rtt);
+            let alt_frequency = alt_path.frequency; // Save for logging
+
+            // For alternate paths, we still need to count the received packet
+            self.received += 1;
+            self.update_loss_percent();
+
+            tracing::debug!(
+                "Alternate path detected: hop={}, primary={:?}, alternate={}, frequency={}",
+                self.hop,
+                self.addr,
+                addr,
+                alt_frequency
+            );
+        }
+    }
+
+    /// Get all alternate paths sorted by frequency
+    pub fn get_alternate_paths(&self) -> Vec<&AlternatePath> {
+        let mut paths: Vec<_> = self.alternate_paths.values().collect();
+        paths.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        paths
+    }
+
+    /// Check if this hop has multiple paths
+    pub fn has_multiple_paths(&self) -> bool {
+        !self.alternate_paths.is_empty()
+    }
+
+    /// Get total frequency across all paths
+    pub fn get_total_frequency(&self) -> usize {
+        let primary_freq = self
+            .path_frequency
+            .get(&self.addr.unwrap_or(IpAddr::from([0, 0, 0, 0])))
+            .unwrap_or(&0);
+        let alt_freq: usize = self.alternate_paths.values().map(|p| p.frequency).sum();
+        primary_freq + alt_freq
+    }
+
+    /// Calculate percentage for an alternate path
+    pub fn get_path_percentage(&self, path: &AlternatePath) -> f64 {
+        let total = self.get_total_frequency();
+        if total > 0 {
+            (path.frequency as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate percentage for the primary path
+    pub fn get_primary_path_percentage(&self) -> f64 {
+        let total = self.get_total_frequency();
+        if total > 0 {
+            let primary_freq = self
+                .path_frequency
+                .get(&self.addr.unwrap_or(IpAddr::from([0, 0, 0, 0])))
+                .unwrap_or(&0);
+            (*primary_freq as f64 / total as f64) * 100.0
+        } else {
+            100.0 // If no frequency data, assume 100%
+        }
+    }
+
+    /// Set hostname for a specific address
+    pub fn set_hostname_for_addr(&mut self, addr: IpAddr, hostname: String) {
+        if Some(addr) == self.addr {
+            self.hostname = Some(hostname);
+        } else if let Some(alt_path) = self.alternate_paths.get_mut(&addr) {
+            alt_path.hostname = Some(hostname);
         }
     }
 
@@ -161,7 +298,9 @@ impl HopStats {
 
     pub fn update_loss_percent(&mut self) {
         if self.sent > 0 {
-            self.loss_percent = ((self.sent - self.received) as f64 / self.sent as f64) * 100.0;
+            // Ensure received can't exceed sent to prevent overflow
+            let actual_received = self.received.min(self.sent);
+            self.loss_percent = ((self.sent - actual_received) as f64 / self.sent as f64) * 100.0;
         }
     }
 

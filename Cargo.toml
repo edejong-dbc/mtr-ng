@@ -1,6 +1,6 @@
 [package]
 name = "mtr-ng"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A modern, feature-rich implementation of My Traceroute (MTR) with real-time network path visualization"
 license = "MIT OR Apache-2.0"
