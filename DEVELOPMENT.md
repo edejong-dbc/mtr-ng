@@ -88,8 +88,9 @@ The script will:
 - ✅ Check working directory is clean
 - ✅ Update `Cargo.toml`
 - ✅ Build to verify changes
-- ✅ Create commit and tag
-- ✅ Push to trigger release
+- ✅ Create commit and push
+- ✅ Wait for CI to pass
+- ✅ Create tag to trigger release
 
 ## CI/CD Pipeline
 

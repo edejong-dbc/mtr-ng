@@ -20,9 +20,9 @@ usage() {
     echo ""
     echo "This script will:"
     echo "  1. Update Cargo.toml version"
-    echo "  2. Create a git commit"
-    echo "  3. Create a git tag"
-    echo "  4. Push both commit and tag"
+    echo "  2. Create a git commit and push"
+    echo "  3. Wait for CI to pass"
+    echo "  4. Create and push git tag (triggers release)"
     exit 1
 }
 
@@ -93,19 +93,87 @@ echo -e "${YELLOW}📝 Creating commit...${NC}"
 git add Cargo.toml
 git commit -m "Bump version to $NEW_VERSION"
 
-# Create and push tag
-echo -e "${YELLOW}🏷️  Creating and pushing tag...${NC}"
-git tag "v$NEW_VERSION"
-
-# Push both commit and tag
-echo -e "${YELLOW}⬆️  Pushing to remote...${NC}"
+# Push commit first to trigger CI
+echo -e "${YELLOW}⬆️  Pushing commit to trigger CI...${NC}"
 git push origin $(git branch --show-current)
+
+# Wait for CI to pass
+echo -e "${YELLOW}⏳ Waiting for CI to complete...${NC}"
+wait_for_ci() {
+    local repo_info=$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^/]*\/[^/]*\)\.git/\1/')
+    local commit_sha=$(git rev-parse HEAD)
+    local max_attempts=60  # 10 minutes (60 * 10 seconds)
+    local attempt=0
+    
+    echo "Monitoring CI status for commit: $commit_sha"
+    echo "Repository: $repo_info"
+    echo ""
+    
+    while [ $attempt -lt $max_attempts ]; do
+        # Check if gh CLI is available
+        if command -v gh > /dev/null 2>&1; then
+            # Use GitHub CLI to check status
+            local status=$(gh run list --commit "$commit_sha" --json status --jq '.[0].status' 2>/dev/null || echo "unknown")
+            local conclusion=$(gh run list --commit "$commit_sha" --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "unknown")
+            
+            case "$status" in
+                "completed")
+                    if [ "$conclusion" = "success" ]; then
+                        echo -e "${GREEN}✅ CI passed! Proceeding with release...${NC}"
+                        return 0
+                    elif [ "$conclusion" = "failure" ] || [ "$conclusion" = "cancelled" ]; then
+                        echo -e "${RED}❌ CI failed with status: $conclusion${NC}"
+                        echo "Please fix the issues and try again."
+                        echo "CI Results: https://github.com/$repo_info/actions"
+                        return 1
+                    fi
+                    ;;
+                "in_progress"|"queued")
+                    echo -e "${BLUE}🔄 CI in progress... (attempt $((attempt + 1))/$max_attempts)${NC}"
+                    ;;
+                *)
+                    echo -e "${YELLOW}⚠️  Unknown CI status: $status (attempt $((attempt + 1))/$max_attempts)${NC}"
+                    ;;
+            esac
+        else
+            echo -e "${YELLOW}⚠️  GitHub CLI not found. Install 'gh' for automatic CI monitoring.${NC}"
+            echo "Please manually verify CI passes before continuing."
+            echo "CI Status: https://github.com/$repo_info/actions"
+            echo ""
+            read -p "Has CI passed? Continue with release? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                return 0
+            else
+                echo "Release cancelled."
+                return 1
+            fi
+        fi
+        
+        sleep 10
+        attempt=$((attempt + 1))
+    done
+    
+    echo -e "${RED}❌ Timeout waiting for CI to complete${NC}"
+    echo "Please check CI status manually: https://github.com/$repo_info/actions"
+    return 1
+}
+
+if ! wait_for_ci; then
+    echo -e "${RED}❌ Cannot proceed with release - CI checks failed or timed out${NC}"
+    exit 1
+fi
+
+# Create and push tag only after CI passes
+echo -e "${YELLOW}🏷️  Creating and pushing release tag...${NC}"
+git tag "v$NEW_VERSION"
 git push origin "v$NEW_VERSION"
 
 echo ""
 echo -e "${GREEN}✅ Version successfully bumped to $NEW_VERSION${NC}"
+echo -e "${GREEN}✅ CI checks passed - release is now building${NC}"
 echo "🚀 GitHub Actions will now build and release version v$NEW_VERSION"
 echo ""
 echo "Next steps:"
-echo "  - Check GitHub Actions progress: https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^/]*\/[^/]*\)\.git/\1/')/actions"
-echo "  - Monitor release creation: https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^/]*\/[^/]*\)\.git/\1/')/releases" 
+echo "  - Monitor release build: https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^/]*\/[^/]*\)\.git/\1/')/actions"
+echo "  - Check release when ready: https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^/]*\/[^/]*\)\.git/\1/')/releases" 
