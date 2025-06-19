@@ -477,7 +477,7 @@ fn create_table_cells(
         .iter()
         .map(|column| {
             match column {
-                Column::Hop => Cell::from(hop.hop.to_string()),
+                Column::Hop => Cell::from(format!("{:>2}", hop.hop)),
                 Column::Host => Cell::from(hostname.to_owned()),
                 Column::Loss => {
                     let loss_pct = hop.loss_percent;
@@ -488,56 +488,56 @@ fn create_table_cells(
                     } else {
                         Color::Green
                     };
-                    Cell::from(format!("{:.1}%", loss_pct)).style(Style::default().fg(color))
+                    Cell::from(format!("{:>4.1}%", loss_pct)).style(Style::default().fg(color))
                 }
-                Column::Sent => Cell::from(hop.sent.to_string()),
+                Column::Sent => Cell::from(format!("{:>3}", hop.sent)),
                 Column::Last => {
                     if let Some(last_rtt) = hop.rtts.back() {
-                        Cell::from(format!("{:.1}", last_rtt.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", last_rtt.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::Avg => {
                     if let Some(avg_rtt) = hop.avg_rtt {
-                        Cell::from(format!("{:.1}", avg_rtt.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", avg_rtt.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::Ema => {
                     if let Some(ema_rtt) = hop.ema_rtt {
-                        Cell::from(format!("{:.1}", ema_rtt.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", ema_rtt.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::Jitter => {
                     if let Some(jitter) = hop.last_jitter {
-                        Cell::from(format!("{:.1}", jitter.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", jitter.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::JitterAvg => {
                     if let Some(jitter_avg) = hop.jitter_avg {
-                        Cell::from(format!("{:.1}", jitter_avg.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", jitter_avg.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::Best => {
                     if let Some(best_rtt) = hop.best_rtt {
-                        Cell::from(format!("{:.1}", best_rtt.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", best_rtt.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::Worst => {
                     if let Some(worst_rtt) = hop.worst_rtt {
-                        Cell::from(format!("{:.1}", worst_rtt.as_secs_f64() * 1000.0))
+                        Cell::from(format!("{:>6.1}", worst_rtt.as_secs_f64() * 1000.0))
                     } else {
-                        Cell::from("???")
+                        Cell::from(format!("{:>6}", "???"))
                     }
                 }
                 Column::Graph => {
