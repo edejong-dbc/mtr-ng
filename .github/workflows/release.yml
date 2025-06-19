@@ -6,6 +6,11 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,57 +18,56 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Get version from tag
         id: get_version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "mtr-ng ${{ steps.get_version.outputs.version }}" \
+            --notes "# mtr-ng ${{ steps.get_version.outputs.version }}
+
+          ## Installation
+
+          ### Quick Install (Unix/Linux/macOS)
+          \`\`\`bash
+          curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | bash
+          \`\`\`
+
+          ### Package Managers
+          \`\`\`bash
+          # Cargo (Rust)
+          cargo install mtr-ng
+
+          # From source
+          git clone https://github.com/${{ github.repository }}
+          cd mtr-ng && cargo build --release
+          \`\`\`
+
+          ### Manual Download
+          Download the appropriate binary for your platform from the assets below.
+
+          ## Usage
+          \`\`\`bash
+          # Basic usage
+          sudo mtr-ng google.com
+
+          # Show all metrics
+          sudo mtr-ng google.com --show-all
+
+          # Generate report
+          mtr-ng google.com --report --count 10
+          \`\`\`" \
+            --draft=false \
+            --prerelease=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          body: |
-            Release ${{ steps.get_version.outputs.version }}
-            
-            ## Installation
-            
-            ### Quick Install (Unix/Linux/macOS)
-            ```bash
-            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install/install.sh | bash
-            ```
-            
-            ### Homebrew (macOS)
-            ```bash
-            brew install mtr-ng
-            ```
-            
-            ### Cargo (Rust)
-            ```bash
-            cargo install mtr-ng
-            ```
-            
-            ### Manual Download
-            Download the appropriate binary for your platform from the assets below.
-            
-            ## Usage
-            ```bash
-            # Basic usage
-            sudo mtr-ng google.com
-            
-            # Show all metrics
-            sudo mtr-ng google.com --show-all
-            
-            # Generate report
-            mtr-ng google.com --report --count 10
-            ```
-          draft: false
-          prerelease: false
 
   build-release:
     needs: create-release
@@ -130,14 +134,10 @@ jobs:
           echo "ASSET=mtr-ng-${{ needs.create-release.outputs.version }}-${{ matrix.name }}.zip" >> $env:GITHUB_ENV
 
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        run: |
+          gh release upload v${{ needs.create-release.outputs.version }} target/${{ matrix.target }}/release/${{ env.ASSET }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/${{ matrix.target }}/release/${{ env.ASSET }}
-          asset_name: ${{ env.ASSET }}
-          asset_content_type: application/octet-stream
 
   build-packages:
     needs: create-release
@@ -163,14 +163,10 @@ jobs:
           mv target/debian/*.deb ./mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
 
       - name: Upload DEB package
-        uses: actions/upload-release-asset@v1
+        run: |
+          gh release upload v${{ needs.create-release.outputs.version }} ./mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
-          asset_name: mtr-ng_${{ needs.create-release.outputs.version }}_amd64.deb
-          asset_content_type: application/vnd.debian.binary-package
 
   publish-crate:
     needs: [create-release, build-release]
