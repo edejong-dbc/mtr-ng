@@ -44,6 +44,8 @@ pub struct UiState {
     pub show_help: bool,
     pub visualization_mode: VisualizationMode,
     pub show_hostnames: bool, // Toggle between hostnames and IP addresses
+    pub show_column_selector: bool, // Show column selection popup
+    pub column_selector_state: ColumnSelectorState, // State for column selector
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,8 +62,76 @@ pub enum VisualizationMode {
     Heatmap,   // Full height blocks (█) with colors only
 }
 
+// ========================================
+// Column Selector State
+// ========================================
+
+#[derive(Debug, Clone)]
+pub struct ColumnSelectorState {
+    pub selected_index: usize,
+    pub available_columns: Vec<(Column, bool)>, // (column, is_enabled)
+}
+
+impl ColumnSelectorState {
+    pub fn new(enabled_columns: &[Column]) -> Self {
+        let all_columns = Column::all();
+        let available_columns = all_columns
+            .into_iter()
+            .map(|col| (col, enabled_columns.contains(&col)))
+            .collect();
+
+        Self {
+            selected_index: 0,
+            available_columns,
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected_index < self.available_columns.len().saturating_sub(1) {
+            self.selected_index += 1;
+        }
+    }
+
+    pub fn toggle_selected(&mut self) {
+        if let Some((_col, enabled)) = self.available_columns.get_mut(self.selected_index) {
+            *enabled = !*enabled;
+        }
+    }
+
+    pub fn move_selected_up(&mut self) {
+        if self.selected_index > 0 {
+            self.available_columns
+                .swap(self.selected_index - 1, self.selected_index);
+            self.selected_index -= 1;
+        }
+    }
+
+    pub fn move_selected_down(&mut self) {
+        if self.selected_index < self.available_columns.len().saturating_sub(1) {
+            self.available_columns
+                .swap(self.selected_index, self.selected_index + 1);
+            self.selected_index += 1;
+        }
+    }
+
+    pub fn get_enabled_columns(&self) -> Vec<Column> {
+        self.available_columns
+            .iter()
+            .filter(|(_, enabled)| *enabled)
+            .map(|(col, _)| *col)
+            .collect()
+    }
+}
+
 impl UiState {
     pub fn new(scale: SparklineScale, columns: Vec<Column>, enable_sixel: bool) -> Self {
+        let column_selector_state = ColumnSelectorState::new(&columns);
         Self {
             current_sparkline_scale: scale,
             color_support: detect_color_support(),
@@ -71,11 +141,52 @@ impl UiState {
             show_help: false,
             visualization_mode: VisualizationMode::Sparkline,
             show_hostnames: true, // Start with hostnames enabled by default
+            show_column_selector: false,
+            column_selector_state,
         }
     }
 
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub fn toggle_column_selector(&mut self) {
+        if self.show_column_selector {
+            // Just close - changes were already applied immediately
+        } else {
+            // Reset selector state when opening
+            self.column_selector_state = ColumnSelectorState::new(&self.columns);
+        }
+        self.show_column_selector = !self.show_column_selector;
+    }
+
+    // Immediate update methods for live preview
+    pub fn toggle_selected_column_immediate(&mut self) {
+        self.column_selector_state.toggle_selected();
+        self.apply_column_changes_immediate();
+    }
+
+    pub fn move_selected_column_up_immediate(&mut self) {
+        self.column_selector_state.move_selected_up();
+        self.apply_column_changes_immediate();
+    }
+
+    pub fn move_selected_column_down_immediate(&mut self) {
+        self.column_selector_state.move_selected_down();
+        self.apply_column_changes_immediate();
+    }
+
+    fn apply_column_changes_immediate(&mut self) {
+        self.columns = self.column_selector_state.get_enabled_columns();
+        // Ensure at least one column remains
+        if self.columns.is_empty() {
+            self.columns.push(Column::Host);
+            self.column_selector_state
+                .available_columns
+                .iter_mut()
+                .find(|(col, _)| matches!(col, Column::Host))
+                .map(|(_, enabled)| *enabled = true);
+        }
     }
 
     pub fn toggle_visualization_mode(&mut self) {
@@ -643,6 +754,110 @@ fn create_status_text(session: &MtrSession, ui_state: &UiState) -> Line<'static>
     ])
 }
 
+/// Create column selection popup
+fn create_column_selector_popup(state: &ColumnSelectorState) -> Paragraph<'static> {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Column Selection & Ordering",
+            Style::default().fg(Color::Yellow),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("↑/↓", Style::default().fg(Color::Green)),
+            Span::raw(" - Navigate  "),
+            Span::styled("Space", Style::default().fg(Color::Green)),
+            Span::raw(" - Toggle"),
+        ]),
+        Line::from(vec![
+            Span::styled("←/→", Style::default().fg(Color::Green)),
+            Span::raw(" or "),
+            Span::styled("Shift+↑/↓", Style::default().fg(Color::Green)),
+            Span::raw(" - Reorder columns"),
+        ]),
+        Line::from(""),
+    ];
+
+    for (i, (column, enabled)) in state.available_columns.iter().enumerate() {
+        let column_name = match column {
+            Column::Hop => "Hop Number",
+            Column::Host => "Hostname/IP",
+            Column::Loss => "Packet Loss %",
+            Column::Sent => "Packets Sent",
+            Column::Last => "Last RTT",
+            Column::Avg => "Average RTT",
+            Column::Ema => "EMA RTT",
+            Column::Jitter => "Last Jitter",
+            Column::JitterAvg => "Average Jitter",
+            Column::Best => "Best RTT",
+            Column::Worst => "Worst RTT",
+            Column::Graph => "RTT Graph",
+        };
+
+        let checkbox = if *enabled { "☑" } else { "☐" };
+        let is_selected = i == state.selected_index;
+
+        let style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default()
+        };
+
+        let checkbox_style = if *enabled {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        // Add position indicator (no cursor needed)
+        let position_indicator = format!("{:2}.", i + 1);
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", position_indicator),
+                if is_selected {
+                    Style::default().fg(Color::Yellow).bg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                },
+            ),
+            Span::styled(
+                format!(" {} ", checkbox),
+                if is_selected {
+                    checkbox_style.bg(Color::White)
+                } else {
+                    checkbox_style
+                },
+            ),
+            Span::styled(format!("{}", column_name), style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Esc", Style::default().fg(Color::Green)),
+        Span::raw(" - Close"),
+    ]));
+
+    // Add debug info showing current selection
+    lines.push(Line::from(vec![Span::styled(
+        format!(
+            "Selection: {} of {}",
+            state.selected_index + 1,
+            state.available_columns.len()
+        ),
+        Style::default().fg(Color::Cyan),
+    )]));
+
+    Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Column Settings")
+                .title_alignment(Alignment::Center),
+        )
+        .alignment(Alignment::Left)
+}
+
 /// Create help overlay with keyboard shortcuts
 fn create_help_overlay() -> Paragraph<'static> {
     let help_text = vec![
@@ -672,6 +887,10 @@ fn create_help_overlay() -> Paragraph<'static> {
         Line::from(vec![
             Span::styled("f", Style::default().fg(Color::Green)),
             Span::raw("        - Toggle column fields"),
+        ]),
+        Line::from(vec![
+            Span::styled("o", Style::default().fg(Color::Green)),
+            Span::raw("        - Open column selector"),
         ]),
         Line::from(vec![
             Span::styled("v", Style::default().fg(Color::Green)),
@@ -945,6 +1164,31 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         f.render_widget(Clear, help_area);
         f.render_widget(create_help_overlay(), help_area);
     }
+
+    // Show column selector popup if enabled
+    if ui_state.show_column_selector {
+        let area = f.area();
+        // Center the column selector popup - make it larger than help
+        let popup_width = 60.min(area.width.saturating_sub(4));
+        let popup_height = (ui_state.column_selector_state.available_columns.len() + 8)
+            .min(area.height.saturating_sub(4) as usize) as u16;
+        let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+        let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        // Clear the background and render column selector
+        f.render_widget(Clear, popup_area);
+        f.render_widget(
+            create_column_selector_popup(&ui_state.column_selector_state),
+            popup_area,
+        );
+    }
 }
 
 fn format_hostname(session: &MtrSession, hop: &HopStats, ui_state: &UiState) -> String {
@@ -1061,21 +1305,64 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
         let timeout = Duration::from_millis(10);
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('r') => {
-                        let mut session_guard = session_clone.lock().unwrap();
-                        for hop in &mut session_guard.hops {
-                            *hop = HopStats::new(hop.hop);
+                // Handle column selector popup inputs first
+                if ui_state.show_column_selector {
+                    match key.code {
+                        KeyCode::Esc => {
+                            // Close column selector
+                            ui_state.show_column_selector = false;
+                        }
+                        KeyCode::Up => {
+                            ui_state.column_selector_state.move_up();
+                        }
+                        KeyCode::Down => {
+                            ui_state.column_selector_state.move_down();
+                        }
+                        KeyCode::Char(' ') => {
+                            ui_state.toggle_selected_column_immediate();
+                        }
+                        KeyCode::Left => {
+                            // Move selected column up in list
+                            ui_state.move_selected_column_up_immediate();
+                        }
+                        KeyCode::Right => {
+                            // Move selected column down in list
+                            ui_state.move_selected_column_down_immediate();
+                        }
+                        _ => {
+                            // Check for Shift+Up/Down for reordering (alternative to Left/Right)
+                            if key.modifiers == crossterm::event::KeyModifiers::SHIFT {
+                                match key.code {
+                                    KeyCode::Up => {
+                                        ui_state.move_selected_column_up_immediate();
+                                    }
+                                    KeyCode::Down => {
+                                        ui_state.move_selected_column_down_immediate();
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
-                    KeyCode::Char('s') => ui_state.toggle_sparkline_scale(),
-                    KeyCode::Char('c') => ui_state.cycle_color_mode(),
-                    KeyCode::Char('f') => ui_state.toggle_column(),
-                    KeyCode::Char('v') => ui_state.toggle_visualization_mode(),
-                    KeyCode::Char('h') => ui_state.toggle_hostnames(),
-                    KeyCode::Char('?') => ui_state.toggle_help(),
-                    _ => {}
+                } else {
+                    // Handle normal keyboard shortcuts
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('r') => {
+                            let mut session_guard = session_clone.lock().unwrap();
+                            for hop in &mut session_guard.hops {
+                                *hop = HopStats::new(hop.hop);
+                            }
+                        }
+                        KeyCode::Char('s') => ui_state.toggle_sparkline_scale(),
+                        KeyCode::Char('c') => ui_state.cycle_color_mode(),
+                        KeyCode::Char('f') => ui_state.toggle_column(),
+                        KeyCode::Char('o') => ui_state.toggle_column_selector(),
+                        KeyCode::Char('v') => ui_state.toggle_visualization_mode(),
+                        KeyCode::Char('h') => ui_state.toggle_hostnames(),
+                        KeyCode::Char('?') => ui_state.toggle_help(),
+                        _ => {}
+                    }
                 }
             }
         }
