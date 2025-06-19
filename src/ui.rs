@@ -1,5 +1,5 @@
 //! User Interface Module
-//! 
+//!
 //! This module provides a terminal-based user interface for the mtr-ng network diagnostic tool.
 //! It includes colorblind-friendly visualizations, sparkline graphs, interactive controls,
 //! and support for various terminal color modes.
@@ -16,10 +16,10 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect, Alignment},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Table, Row, Cell, Widget},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
     Frame, Terminal,
 };
 use std::{
@@ -197,18 +197,32 @@ mod colors {
 
         let color = match color_support {
             ColorSupport::None => Color::White,
-            ColorSupport::Basic => {
-                [Color::Green, Color::Green, Color::Cyan, Color::Yellow, 
-                 Color::Yellow, Color::Magenta, Color::Magenta, Color::Red, Color::Red][level.min(8)]
-            }
-            ColorSupport::Extended => {
-                [17, 21, 39, 75, 111, 179, 215, 208, 130]
-                    .get(level).map(|&i| Color::Indexed(i)).unwrap_or(Color::Indexed(130))
-            }
+            ColorSupport::Basic => [
+                Color::Green,
+                Color::Green,
+                Color::Cyan,
+                Color::Yellow,
+                Color::Yellow,
+                Color::Magenta,
+                Color::Magenta,
+                Color::Red,
+                Color::Red,
+            ][level.min(8)],
+            ColorSupport::Extended => [17, 21, 39, 75, 111, 179, 215, 208, 130]
+                .get(level)
+                .map(|&i| Color::Indexed(i))
+                .unwrap_or(Color::Indexed(130)),
             ColorSupport::TrueColor => {
                 let colors = [
-                    (0, 50, 150), (0, 100, 200), (50, 150, 255), (100, 200, 255), 
-                    (150, 220, 255), (255, 200, 100), (255, 150, 50), (220, 120, 0), (150, 80, 0)
+                    (0, 50, 150),
+                    (0, 100, 200),
+                    (50, 150, 255),
+                    (100, 200, 255),
+                    (150, 220, 255),
+                    (255, 200, 100),
+                    (255, 150, 50),
+                    (220, 120, 0),
+                    (150, 80, 0),
                 ];
                 let (r, g, b) = colors[level.min(8)];
                 Color::Rgb(r, g, b)
@@ -220,13 +234,16 @@ mod colors {
 
     pub fn get_smooth_gradient_color(ratio: f64, color_support: ColorSupport) -> Color {
         let ratio = ratio.clamp(0.0, 1.0);
-        
+
         match color_support {
             ColorSupport::None => Color::White,
-            ColorSupport::Basic => {
-                [Color::Blue, Color::Cyan, Color::Yellow, Color::Magenta, Color::Red]
-                    [(ratio * 4.0) as usize]
-            }
+            ColorSupport::Basic => [
+                Color::Blue,
+                Color::Cyan,
+                Color::Yellow,
+                Color::Magenta,
+                Color::Red,
+            ][(ratio * 4.0) as usize],
             ColorSupport::Extended => {
                 let steps = [17, 21, 33, 39, 75, 111, 179, 215];
                 let index = (ratio * (steps.len() - 1) as f64) as usize;
@@ -263,7 +280,11 @@ mod colors {
         }
     }
 
-    fn interpolate_rgb(start: (f64, f64, f64), end: (f64, f64, f64), ratio: f64) -> (f64, f64, f64) {
+    fn interpolate_rgb(
+        start: (f64, f64, f64),
+        end: (f64, f64, f64),
+        ratio: f64,
+    ) -> (f64, f64, f64) {
         let ratio = ratio.clamp(0.0, 1.0);
         (
             start.0 + (end.0 - start.0) * ratio,
@@ -303,22 +324,20 @@ fn create_sparkline_spans(
 
     let mut spans: Vec<Span<'static>> = data_to_show
         .iter()
-        .map(|outcome| {
-            match outcome {
-                crate::hop_stats::PacketOutcome::Received(rtt) => {
-                    let rtt_ms = (rtt.as_secs_f64() * 1000.0) as u64;
-                    let ratio = calculate_rtt_ratio(rtt_ms, global_min_rtt, global_max_rtt, scale);
-                    let (char, color) = colors::get_rtt_color(ratio, color_support);
-                    Span::styled(char.to_string(), Style::default().fg(color))
-                }
-                crate::hop_stats::PacketOutcome::Lost => {
-                    let color = colors::get_loss_color(color_support);
-                    Span::styled("·".to_string(), Style::default().fg(color))
-                }
-                crate::hop_stats::PacketOutcome::Pending => {
-                    let color = colors::get_pending_color(color_support);
-                    Span::styled("?".to_string(), Style::default().fg(color))
-                }
+        .map(|outcome| match outcome {
+            crate::hop_stats::PacketOutcome::Received(rtt) => {
+                let rtt_ms = (rtt.as_secs_f64() * 1000.0) as u64;
+                let ratio = calculate_rtt_ratio(rtt_ms, global_min_rtt, global_max_rtt, scale);
+                let (char, color) = colors::get_rtt_color(ratio, color_support);
+                Span::styled(char.to_string(), Style::default().fg(color))
+            }
+            crate::hop_stats::PacketOutcome::Lost => {
+                let color = colors::get_loss_color(color_support);
+                Span::styled("·".to_string(), Style::default().fg(color))
+            }
+            crate::hop_stats::PacketOutcome::Pending => {
+                let color = colors::get_pending_color(color_support);
+                Span::styled("?".to_string(), Style::default().fg(color))
             }
         })
         .collect();
@@ -384,7 +403,12 @@ fn create_heatmap_spans(
     spans
 }
 
-fn calculate_rtt_ratio(rtt_ms: u64, global_min: u64, global_max: u64, scale: SparklineScale) -> f64 {
+fn calculate_rtt_ratio(
+    rtt_ms: u64,
+    global_min: u64,
+    global_max: u64,
+    scale: SparklineScale,
+) -> f64 {
     if global_min == global_max || rtt_ms == 0 {
         return 0.0;
     }
@@ -412,28 +436,32 @@ pub struct EnhancedTable<'a> {
 }
 
 impl<'a> EnhancedTable<'a> {
-    pub fn new(
-        table: Table<'a>,
-        sixel_renderer: &'a SixelRenderer,
-        columns: &'a [Column],
-    ) -> Self {
-        Self { table, sixel_renderer, columns }
+    pub fn new(table: Table<'a>, sixel_renderer: &'a SixelRenderer, columns: &'a [Column]) -> Self {
+        Self {
+            table,
+            sixel_renderer,
+            columns,
+        }
     }
 }
 
 impl<'a> Widget for EnhancedTable<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         self.table.render(area, buf);
-        
+
         if !self.sixel_renderer.enabled {
             return;
         }
 
-                 // Add Sixel graphics for Graph column if present
-         if let Some(_graph_col_idx) = self.columns.iter().position(|col| matches!(col, Column::Graph)) {
-             // Sixel rendering logic would go here
-             // For now, skip detailed implementation since it's complex
-         }
+        // Add Sixel graphics for Graph column if present
+        if let Some(_graph_col_idx) = self
+            .columns
+            .iter()
+            .position(|col| matches!(col, Column::Graph))
+        {
+            // Sixel rendering logic would go here
+            // For now, skip detailed implementation since it's complex
+        }
     }
 }
 
@@ -445,106 +473,124 @@ fn create_table_cells(
     columns: &[Column],
     sixel_enabled: bool,
 ) -> Vec<Cell<'static>> {
-    columns.iter().map(|column| {
-        match column {
-            Column::Hop => Cell::from(hop.hop.to_string()),
-            Column::Host => Cell::from(hostname.to_owned()),
-            Column::Loss => {
-                let loss_pct = hop.loss_percent;
-                let color = if loss_pct > 50.0 { Color::Red }
-                          else if loss_pct > 10.0 { Color::Yellow }
-                          else { Color::Green };
-                Cell::from(format!("{:.1}%", loss_pct)).style(Style::default().fg(color))
-            }
-            Column::Sent => Cell::from(hop.sent.to_string()),
-            Column::Last => {
-                if let Some(last_rtt) = hop.rtts.back() {
-                    Cell::from(format!("{:.1}", last_rtt.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
+    columns
+        .iter()
+        .map(|column| {
+            match column {
+                Column::Hop => Cell::from(hop.hop.to_string()),
+                Column::Host => Cell::from(hostname.to_owned()),
+                Column::Loss => {
+                    let loss_pct = hop.loss_percent;
+                    let color = if loss_pct > 50.0 {
+                        Color::Red
+                    } else if loss_pct > 10.0 {
+                        Color::Yellow
+                    } else {
+                        Color::Green
+                    };
+                    Cell::from(format!("{:.1}%", loss_pct)).style(Style::default().fg(color))
+                }
+                Column::Sent => Cell::from(hop.sent.to_string()),
+                Column::Last => {
+                    if let Some(last_rtt) = hop.rtts.back() {
+                        Cell::from(format!("{:.1}", last_rtt.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::Avg => {
+                    if let Some(avg_rtt) = hop.avg_rtt {
+                        Cell::from(format!("{:.1}", avg_rtt.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::Ema => {
+                    if let Some(ema_rtt) = hop.ema_rtt {
+                        Cell::from(format!("{:.1}", ema_rtt.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::Jitter => {
+                    if let Some(jitter) = hop.last_jitter {
+                        Cell::from(format!("{:.1}", jitter.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::JitterAvg => {
+                    if let Some(jitter_avg) = hop.jitter_avg {
+                        Cell::from(format!("{:.1}", jitter_avg.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::Best => {
+                    if let Some(best_rtt) = hop.best_rtt {
+                        Cell::from(format!("{:.1}", best_rtt.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::Worst => {
+                    if let Some(worst_rtt) = hop.worst_rtt {
+                        Cell::from(format!("{:.1}", worst_rtt.as_secs_f64() * 1000.0))
+                    } else {
+                        Cell::from("???")
+                    }
+                }
+                Column::Graph => {
+                    if sixel_enabled {
+                        Cell::from("") // Sixel will fill this
+                    } else if !sparkline_spans.is_empty() {
+                        Cell::from(Line::from(sparkline_spans.to_vec()))
+                    } else {
+                        Cell::from("")
+                    }
                 }
             }
-            Column::Avg => {
-                if let Some(avg_rtt) = hop.avg_rtt {
-                    Cell::from(format!("{:.1}", avg_rtt.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
-                }
-            }
-            Column::Ema => {
-                if let Some(ema_rtt) = hop.ema_rtt {
-                    Cell::from(format!("{:.1}", ema_rtt.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
-                }
-            }
-            Column::Jitter => {
-                if let Some(jitter) = hop.last_jitter {
-                    Cell::from(format!("{:.1}", jitter.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
-                }
-            }
-            Column::JitterAvg => {
-                if let Some(jitter_avg) = hop.jitter_avg {
-                    Cell::from(format!("{:.1}", jitter_avg.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
-                }
-            }
-            Column::Best => {
-                if let Some(best_rtt) = hop.best_rtt {
-                    Cell::from(format!("{:.1}", best_rtt.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
-                }
-            }
-            Column::Worst => {
-                if let Some(worst_rtt) = hop.worst_rtt {
-                    Cell::from(format!("{:.1}", worst_rtt.as_secs_f64() * 1000.0))
-                } else {
-                    Cell::from("???")
-                }
-            }
-            Column::Graph => {
-                if sixel_enabled {
-                    Cell::from("") // Sixel will fill this
-                } else if !sparkline_spans.is_empty() {
-                    Cell::from(Line::from(sparkline_spans.to_vec()))
-                } else {
-                    Cell::from("")
-                }
-            }
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 /// Generate column constraints with dynamic sizing for Host and Graph columns
 fn create_column_constraints(columns: &[Column]) -> Vec<Constraint> {
     let has_graph = columns.iter().any(|col| matches!(col, Column::Graph));
-    
-    columns.iter().map(|column| {
-        match column {
-            Column::Hop => Constraint::Length(3),
-            Column::Host => {
-                if has_graph { 
-                    // Use 20% of available space when graph is present
-                    Constraint::Percentage(20) 
-                } else { 
-                    Constraint::Min(15) 
+
+    columns
+        .iter()
+        .map(|column| {
+            match column {
+                Column::Hop => Constraint::Length(3),
+                Column::Host => {
+                    if has_graph {
+                        // Use 20% of available space when graph is present
+                        Constraint::Percentage(20)
+                    } else {
+                        Constraint::Min(15)
+                    }
                 }
+                Column::Loss => Constraint::Length(5),
+                Column::Sent => Constraint::Length(3),
+                Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => {
+                    if has_graph {
+                        Constraint::Length(6)
+                    } else {
+                        Constraint::Length(9)
+                    }
+                }
+                Column::Jitter | Column::JitterAvg => {
+                    if has_graph {
+                        Constraint::Length(6)
+                    } else {
+                        Constraint::Length(9)
+                    }
+                }
+                Column::Graph => Constraint::Percentage(80), // Use 80% of available space
             }
-            Column::Loss => Constraint::Length(5),
-            Column::Sent => Constraint::Length(3),
-            Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => {
-                if has_graph { Constraint::Length(6) } else { Constraint::Length(9) }
-            }
-            Column::Jitter | Column::JitterAvg => {
-                if has_graph { Constraint::Length(6) } else { Constraint::Length(9) }
-            }
-            Column::Graph => Constraint::Percentage(80), // Use 80% of available space
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 // ========================================
@@ -572,11 +618,22 @@ fn create_status_text(session: &MtrSession, ui_state: &UiState) -> Line<'static>
         VisualizationMode::Heatmap => "Heatmap",
     };
 
-    let hostname_mode = if ui_state.show_hostnames { "Hostnames" } else { "IPs" };
-    
+    let hostname_mode = if ui_state.show_hostnames {
+        "Hostnames"
+    } else {
+        "IPs"
+    };
+
     let main_text = format!(
         "mtr-ng: {} → {} | Hops: {} | Sent: {} | Loss: {:.1}% | Scale: {} | Mode: {} | Display: {}",
-        session.target, session.target_addr, active_hops, total_sent, overall_loss, scale_name, viz_mode, hostname_mode
+        session.target,
+        session.target_addr,
+        active_hops,
+        total_sent,
+        overall_loss,
+        scale_name,
+        viz_mode,
+        hostname_mode
     );
 
     Line::from(vec![
@@ -589,9 +646,10 @@ fn create_status_text(session: &MtrSession, ui_state: &UiState) -> Line<'static>
 /// Create help overlay with keyboard shortcuts
 fn create_help_overlay() -> Paragraph<'static> {
     let help_text = vec![
-        Line::from(vec![
-            Span::styled("Keyboard Shortcuts", Style::default().fg(Color::Yellow)),
-        ]),
+        Line::from(vec![Span::styled(
+            "Keyboard Shortcuts",
+            Style::default().fg(Color::Yellow),
+        )]),
         Line::from(""),
         Line::from(vec![
             Span::styled("q", Style::default().fg(Color::Green)),
@@ -628,9 +686,10 @@ fn create_help_overlay() -> Paragraph<'static> {
             Span::raw("        - Toggle this help"),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Press ? again to close", Style::default().fg(Color::Cyan)),
-        ]),
+        Line::from(vec![Span::styled(
+            "Press ? again to close",
+            Style::default().fg(Color::Cyan),
+        )]),
     ];
 
     Paragraph::new(help_text)
@@ -638,7 +697,7 @@ fn create_help_overlay() -> Paragraph<'static> {
             Block::default()
                 .borders(Borders::ALL)
                 .title("Help")
-                .title_alignment(Alignment::Center)
+                .title_alignment(Alignment::Center),
         )
         .alignment(Alignment::Left)
 }
@@ -657,7 +716,7 @@ fn create_scale_widget(
 
     let scale_width = (width / 2).clamp(40, 80);
     let chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    
+
     let scale_spans: Vec<Span> = (0..scale_width)
         .map(|i| {
             let ratio = i as f64 / (scale_width - 1) as f64;
@@ -676,14 +735,12 @@ fn create_scale_widget(
     // Create x-axis labels - use 5 evenly spaced points
     let num_labels = 5;
     let mut label_info = Vec::new();
-    
+
     for i in 0..num_labels {
         let ratio = i as f64 / (num_labels - 1) as f64;
-        
+
         let value = match scale {
-            SparklineScale::Linear => {
-                min_rtt + (ratio * (max_rtt - min_rtt) as f64) as u64
-            }
+            SparklineScale::Linear => min_rtt + (ratio * (max_rtt - min_rtt) as f64) as u64,
             SparklineScale::Logarithmic => {
                 let log_min = (min_rtt as f64 + 1.0).ln();
                 let log_max = (max_rtt as f64 + 1.0).ln();
@@ -691,56 +748,55 @@ fn create_scale_widget(
                 (log_value.exp() - 1.0) as u64
             }
         };
-        
+
         let label = if value < 1000 {
             format!("{}ms", value)
         } else {
             format!("{:.1}s", value as f64 / 1000.0)
         };
-        
+
         // Calculate the center position for this label on the gradient
         let center_pos = (ratio * (scale_width - 1) as f64) as usize;
-        
+
         label_info.push((label, center_pos));
     }
-    
+
     // Build the label line with centered positioning
     let mut label_spans = Vec::new();
     let mut current_pos = 0;
-    
+
     for (i, (label, center_pos)) in label_info.iter().enumerate() {
         // Calculate where this label should start to be centered at center_pos
         let label_len = label.len();
         let label_start = center_pos.saturating_sub(label_len / 2);
-        
+
         // Add spacing to reach the label start position
         if label_start > current_pos {
             let padding = label_start - current_pos;
             label_spans.push(Span::raw(" ".repeat(padding)));
             current_pos += padding;
         }
-        
+
         // Add the label
         label_spans.push(Span::raw(label.clone()));
         current_pos += label_len;
-        
+
         // For the last label, add scale type if there's space
         if i == label_info.len() - 1 {
             let remaining_space = scale_width.saturating_sub(current_pos);
             if remaining_space > scale_name.len() + 4 {
-                label_spans.push(Span::raw(" ".repeat(remaining_space - scale_name.len() - 3)));
+                label_spans.push(Span::raw(
+                    " ".repeat(remaining_space - scale_name.len() - 3),
+                ));
                 label_spans.push(Span::styled(
                     format!("({})", scale_name),
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(Color::Gray),
                 ));
             }
         }
     }
 
-    let scale_text = vec![
-        Line::from(label_spans),
-        Line::from(scale_spans),
-    ];
+    let scale_text = vec![Line::from(label_spans), Line::from(scale_spans)];
 
     Paragraph::new(scale_text)
 }
@@ -750,9 +806,17 @@ fn create_scale_widget(
 // ========================================
 
 /// Main UI rendering function - now much more compact
+/// Renders the main UI layout with status, table, and scale components
+/// 
+/// This function creates a 3-section layout:
+/// 1. Status line - Shows connection info, statistics, and current modes  
+/// 2. Main table - Displays hop data with optional graph visualization
+/// 3. Scale widget - Shows RTT scale with gradient and labeled axis
+/// 
+/// The function also handles the help overlay when toggled by the user.
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let area = f.size();
-    
+
     // Minimum size check
     if area.height < 10 || area.width < 50 {
         let fallback = Paragraph::new(format!(
@@ -768,7 +832,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Status line
-            Constraint::Min(5),    // Main table  
+            Constraint::Min(5),    // Main table
             Constraint::Length(2), // Scale (compact)
         ])
         .split(area);
@@ -781,7 +845,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .flat_map(|hop| hop.rtts.iter())
         .map(|d| (d.as_secs_f64() * 1000.0) as u64)
         .collect();
-    
+
     let global_max_rtt = rtt_values.iter().max().copied().unwrap_or(1);
     let global_min_rtt = rtt_values.iter().min().copied().unwrap_or(1);
 
@@ -791,60 +855,57 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     f.render_widget(status, chunks[0]);
 
     // Main table
-    let header_cells = ui_state.columns.iter().map(|col| {
-        match col {
-            Column::Loss | Column::Sent | Column::Last | Column::Avg | Column::Ema | 
-            Column::Jitter | Column::JitterAvg | Column::Best | Column::Worst => {
-                Cell::from(format!("{:>width$}", col.header(), width = col.width()))
-            }
-            _ => Cell::from(col.header())
-        }
+    let header_cells = ui_state.columns.iter().map(|col| match col {
+        Column::Loss
+        | Column::Sent
+        | Column::Last
+        | Column::Avg
+        | Column::Ema
+        | Column::Jitter
+        | Column::JitterAvg
+        | Column::Best
+        | Column::Worst => Cell::from(format!("{:>width$}", col.header(), width = col.width())),
+        _ => Cell::from(col.header()),
     });
-    
+
     let header = Row::new(header_cells).style(Style::default().fg(Color::Yellow));
 
-    let rows = session
-        .hops
-        .iter()
-        .filter(|hop| hop.sent > 0)
-        .map(|hop| {
-            let hostname = format_hostname(session, hop, ui_state);
-            let graph_width = calculate_graph_width(&chunks[1], &ui_state.columns);
-            
-            let graph_spans = match ui_state.visualization_mode {
-                VisualizationMode::Sparkline => create_sparkline_spans(
-                    hop,
-                    global_min_rtt,
-                    global_max_rtt,
-                    ui_state.current_sparkline_scale,
-                    ui_state.color_support,
-                    graph_width,
-                ),
-                VisualizationMode::Heatmap => create_heatmap_spans(
-                    hop,
-                    global_min_rtt,
-                    global_max_rtt,
-                    ui_state.current_sparkline_scale,
-                    ui_state.color_support,
-                    graph_width,
-                ),
-            };
+    let rows = session.hops.iter().filter(|hop| hop.sent > 0).map(|hop| {
+        let hostname = format_hostname(session, hop, ui_state);
+        let graph_width = calculate_graph_width(&chunks[1], &ui_state.columns);
 
-            let cells = create_table_cells(
+        let graph_spans = match ui_state.visualization_mode {
+            VisualizationMode::Sparkline => create_sparkline_spans(
                 hop,
-                &hostname,
-                &graph_spans,
-                &ui_state.columns,
-                ui_state.sixel_renderer.enabled,
-            );
+                global_min_rtt,
+                global_max_rtt,
+                ui_state.current_sparkline_scale,
+                ui_state.color_support,
+                graph_width,
+            ),
+            VisualizationMode::Heatmap => create_heatmap_spans(
+                hop,
+                global_min_rtt,
+                global_max_rtt,
+                ui_state.current_sparkline_scale,
+                ui_state.color_support,
+                graph_width,
+            ),
+        };
 
-            Row::new(cells)
-        });
+        let cells = create_table_cells(
+            hop,
+            &hostname,
+            &graph_spans,
+            &ui_state.columns,
+            ui_state.sixel_renderer.enabled,
+        );
+
+        Row::new(cells)
+    });
 
     let constraints = create_column_constraints(&ui_state.columns);
-    let table = Table::new(rows)
-        .header(header)
-        .widths(&constraints);
+    let table = Table::new(rows).header(header).widths(&constraints);
 
     // Use enhanced table for Sixel support
     if ui_state.sixel_renderer.enabled {
@@ -872,14 +933,14 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         let help_height = 12.min(area.height.saturating_sub(4));
         let help_x = (area.width.saturating_sub(help_width)) / 2;
         let help_y = (area.height.saturating_sub(help_height)) / 2;
-        
+
         let help_area = Rect {
             x: help_x,
             y: help_y,
             width: help_width,
             height: help_height,
         };
-        
+
         // Clear the background and render help
         f.render_widget(Clear, help_area);
         f.render_widget(create_help_overlay(), help_area);
@@ -889,17 +950,24 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 fn format_hostname(session: &MtrSession, hop: &HopStats, ui_state: &UiState) -> String {
     let hostname = if session.args.numeric || !ui_state.show_hostnames {
         // Show IP addresses when numeric mode or hostname toggle is off
-        hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
+        hop.addr
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "???".to_string())
     } else {
         // Show hostnames when available, fallback to IP
         hop.hostname.clone().unwrap_or_else(|| {
-            hop.addr.map(|a| a.to_string()).unwrap_or_else(|| "???".to_string())
+            hop.addr
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "???".to_string())
         })
     };
 
     // With 20% width allocation, truncate longer hostnames appropriately
-    if hostname.len() > 35 {
-        format!("{}...", &hostname[..32])
+    const MAX_HOSTNAME_LEN: usize = 35;
+    const TRUNCATED_LEN: usize = 32;
+    
+    if hostname.len() > MAX_HOSTNAME_LEN {
+        format!("{}...", &hostname[..TRUNCATED_LEN])
     } else {
         hostname
     }
@@ -909,23 +977,26 @@ fn calculate_graph_width(table_area: &Rect, columns: &[Column]) -> usize {
     if columns.contains(&Column::Graph) {
         // Calculate actual width available for graph column (80% of remaining space)
         let total_width = table_area.width.saturating_sub(4) as usize; // Account for borders
-        
+
         // Calculate space used by fixed-width columns
-        let fixed_width: usize = columns.iter().map(|col| {
-            match col {
-                Column::Hop => 3,
-                Column::Loss => 5,
-                Column::Sent => 3,
-                Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => 6,
-                Column::Jitter | Column::JitterAvg => 6,
-                Column::Host | Column::Graph => 0, // These use percentage-based sizing
-            }
-        }).sum();
-        
+        let fixed_width: usize = columns
+            .iter()
+            .map(|col| {
+                match col {
+                    Column::Hop => 3,
+                    Column::Loss => 5,
+                    Column::Sent => 3,
+                    Column::Last | Column::Avg | Column::Ema | Column::Best | Column::Worst => 6,
+                    Column::Jitter | Column::JitterAvg => 6,
+                    Column::Host | Column::Graph => 0, // These use percentage-based sizing
+                }
+            })
+            .sum();
+
         // Remaining space for Host (20%) and Graph (80%) columns
         let remaining_width = total_width.saturating_sub(fixed_width);
         let graph_width = (remaining_width * 80) / 100;
-        
+
         // Ensure minimum usable width but no upper cap
         graph_width.max(20)
     } else {
@@ -982,7 +1053,7 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
             // Lock session only during rendering to get live updates
             terminal.draw(|f| {
                 let session_guard = session_clone.lock().unwrap();
-                render_ui(f, &*session_guard, &ui_state)
+                render_ui(f, &session_guard, &ui_state)
             })?;
             last_tick = Instant::now();
         }

@@ -391,7 +391,8 @@ impl MtrSession {
                 // Perform reverse DNS lookup
                 if let Ok(names) = self.resolver.reverse_lookup(IpAddr::V4(addr)).await {
                     if let Some(name) = names.iter().next() {
-                        self.hops[index].hostname = Some(name.to_string().trim_end_matches('.').to_string());
+                        self.hops[index].hostname =
+                            Some(name.to_string().trim_end_matches('.').to_string());
                     } else {
                         self.hops[index].hostname = Some(addr.to_string());
                     }
@@ -937,11 +938,15 @@ impl MtrSession {
             };
 
             if do_resolve {
-                if let Ok(names) = resolver_clone.reverse_lookup(IpAddr::V4(addr_for_dns)).await {
+                if let Ok(names) = resolver_clone
+                    .reverse_lookup(IpAddr::V4(addr_for_dns))
+                    .await
+                {
                     if let Some(name) = names.iter().next() {
                         let mut session = session_arc_clone.lock().unwrap();
-                        session.hops[hop_index].hostname = Some(name.to_string().trim_end_matches('.').to_string());
-                        
+                        session.hops[hop_index].hostname =
+                            Some(name.to_string().trim_end_matches('.').to_string());
+
                         // Trigger UI update after hostname resolution
                         if let Some(callback) = &session.update_callback {
                             callback();
@@ -950,8 +955,6 @@ impl MtrSession {
                 }
             }
         });
-
-
 
         // Trigger real-time UI update when a response arrives (outside lock)
         if let Some(callback) = callback {
