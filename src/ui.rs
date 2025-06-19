@@ -941,12 +941,11 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
         let should_update = update_rx.try_recv().is_ok() || last_tick.elapsed() >= tick_rate;
 
         if should_update {
-            let session_snapshot = {
+            // Lock session only during rendering to get live updates
+            terminal.draw(|f| {
                 let session_guard = session_clone.lock().unwrap();
-                session_guard.clone()
-            };
-
-            terminal.draw(|f| render_ui(f, &session_snapshot, &ui_state))?;
+                render_ui(f, &*session_guard, &ui_state)
+            })?;
             last_tick = Instant::now();
         }
 
