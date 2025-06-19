@@ -175,3 +175,41 @@ Contributions welcome! Areas of interest:
 ## License
 
 MIT License - see LICENSE file for details. 
+
+# edejong-dbc/homebrew-tap
+
+This is a Homebrew tap for [mtr-ng](https://github.com/edejong-dbc/mtr-ng), a modern implementation of My Traceroute with real-time network path visualization.
+
+## Installation
+
+```bash
+# Add the tap
+brew tap edejong-dbc/tap
+
+# Install mtr-ng
+brew install mtr-ng
+```
+
+## Usage
+
+```bash
+# Basic usage (requires sudo for raw socket access)
+sudo mtr-ng google.com
+
+# Show all metrics with sparklines
+sudo mtr-ng google.com --show-all
+
+# Generate a report
+mtr-ng google.com --report --count 10
+```
+
+## About mtr-ng
+
+MTR-NG is a modern, feature-rich implementation of My Traceroute (MTR) that provides:
+
+- Real-time network path visualization with Unicode sparklines
+- Comprehensive RTT statistics and jitter analysis
+- Customizable column display and interactive controls
+- Cross-platform support with colorblind-friendly design
+
+For more information, visit the [main repository](https://github.com/edejong-dbc/mtr-ng). 

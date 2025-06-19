@@ -1,10 +1,10 @@
 class MtrNg < Formula
   desc "Modern My Traceroute with real-time network path visualization"
   homepage "https://github.com/edejong-dbc/mtr-ng"
-  url "https://github.com/edejong-dbc/mtr-ng/archive/v0.1.0.tar.gz"
-  sha256 "YOUR_SHA256_HERE" # This will be updated automatically by GitHub/Homebrew
+  url "https://github.com/edejong-dbc/mtr-ng/archive/v0.1.2.tar.gz"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000" # Will be updated automatically
   license "MIT OR Apache-2.0"
-  head "https://github.com/edejong-dbc/mtr-ng.git", branch: "main"
+  head "https://github.com/edejong-dbc/mtr-ng.git", branch: "master"
 
   depends_on "rust" => :build
 

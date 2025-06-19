@@ -807,12 +807,12 @@ fn create_scale_widget(
 
 /// Main UI rendering function - now much more compact
 /// Renders the main UI layout with status, table, and scale components
-/// 
+///
 /// This function creates a 3-section layout:
 /// 1. Status line - Shows connection info, statistics, and current modes  
 /// 2. Main table - Displays hop data with optional graph visualization
 /// 3. Scale widget - Shows RTT scale with gradient and labeled axis
-/// 
+///
 /// The function also handles the help overlay when toggled by the user.
 pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let area = f.size();
@@ -965,7 +965,7 @@ fn format_hostname(session: &MtrSession, hop: &HopStats, ui_state: &UiState) -> 
     // With 20% width allocation, truncate longer hostnames appropriately
     const MAX_HOSTNAME_LEN: usize = 35;
     const TRUNCATED_LEN: usize = 32;
-    
+
     if hostname.len() > MAX_HOSTNAME_LEN {
         format!("{}...", &hostname[..TRUNCATED_LEN])
     } else {

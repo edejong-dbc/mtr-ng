@@ -111,7 +111,7 @@ impl Column {
 #[command(
     about = "A modern implementation of mtr (My Traceroute) with unicode and terminal graphics"
 )]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 pub struct Args {
     /// Target hostname or IP address
     pub target: String,
