@@ -155,6 +155,10 @@ pub struct Args {
     /// Show all available columns including jitter metrics
     #[arg(long, help = "Display all available columns")]
     pub show_all: bool,
+
+    /// Enable simulation mode (generate fake network data for testing/demo)
+    #[arg(long, help = "Run in simulation mode with fake network data")]
+    pub simulate: bool,
 }
 
 impl Args {
@@ -187,6 +191,7 @@ mod tests {
         assert_eq!(args.ema_alpha, 0.1);
         assert!(args.fields.is_none());
         assert!(!args.show_all);
+        assert!(!args.simulate);
     }
 
     #[test]

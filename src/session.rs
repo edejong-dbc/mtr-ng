@@ -116,6 +116,11 @@ impl MtrSession {
     }
 
     async fn run_ipv4_trace(&mut self, target: Ipv4Addr) -> Result<()> {
+        if self.args.simulate {
+            info!("Running in simulation mode (--simulate flag enabled)");
+            return self.run_simulated_trace().await;
+        }
+
         // Try to create raw socket for ICMP
         match self.create_raw_socket() {
             Ok((send_socket, recv_socket)) => {
@@ -124,8 +129,10 @@ impl MtrSession {
                     .await
             }
             Err(e) => {
-                warn!("Failed to create raw socket ({}), falling back to simulation. Try running with sudo for real traceroute.", e);
-                self.run_simulated_trace().await
+                anyhow::bail!(
+                    "Failed to create raw ICMP socket: {}. This usually means insufficient permissions. \
+                    Try running with sudo, or use --simulate for demo mode.", e
+                );
             }
         }
     }
@@ -652,6 +659,11 @@ impl MtrSession {
         target: Ipv4Addr,
         args: Args,
     ) -> Result<()> {
+        if args.simulate {
+            info!("Running in simulation mode (--simulate flag enabled)");
+            return Self::run_simulated_trace_realtime(session_arc, args).await;
+        }
+
         // Try to create raw socket for ICMP
         let socket_result = {
             let session = session_arc.lock().unwrap();
@@ -671,8 +683,10 @@ impl MtrSession {
                 .await
             }
             Err(e) => {
-                warn!("Failed to create raw socket ({}), falling back to simulation. Try running with sudo for real traceroute.", e);
-                Self::run_simulated_trace_realtime(session_arc, args).await
+                anyhow::bail!(
+                    "Failed to create raw ICMP socket: {}. This usually means insufficient permissions. \
+                    Try running with sudo, or use --simulate for demo mode.", e
+                );
             }
         }
     }
@@ -1142,6 +1156,7 @@ mod tests {
             fields: None,
             sixel: false,
             show_all: false,
+            simulate: false,
         };
 
         let session = MtrSession::new(args).await;
@@ -1169,6 +1184,7 @@ mod tests {
             fields: None,
             sixel: false,
             show_all: false,
+            simulate: false,
         };
 
         let session = MtrSession::new(args).await;
@@ -1195,6 +1211,7 @@ mod tests {
             fields: None,
             sixel: false,
             show_all: false,
+            simulate: false,
         };
 
         // We can't easily test MtrSession::new in sync context due to async resolver,
