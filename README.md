@@ -47,7 +47,12 @@ curl -sSL https://raw.githubusercontent.com/edejong-dbc/mtr-ng/main/install/inst
 
 #### Homebrew (macOS)
 ```bash
+# Option 1: Using the tap (recommended)
+brew tap edejong-dbc/tap
 brew install mtr-ng
+
+# Option 2: Direct install without adding tap
+brew install edejong-dbc/tap/mtr-ng
 ```
 
 #### Cargo (Rust)
