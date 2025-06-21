@@ -724,7 +724,7 @@ impl MtrSession {
 
                         if hop.hop >= 8 {
                             break;
-                        }
+                            }
                         } else {
                             hop.add_timeout();
                     }
