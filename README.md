@@ -136,11 +136,7 @@ Monitor network stability with comprehensive jitter metrics:
 - **Average Jitter**: Long-term jitter trends
 - Helps identify unstable network segments
 
-### Sixel Graphics Foundation
-MTR-NG includes experimental Sixel graphics support:
-- `--sixel` flag available for future enhanced sparklines
-- Currently uses reliable Unicode fallback
-- Foundation for high-resolution terminal graphics
+
 
 ## Column Reference
 
@@ -166,7 +162,6 @@ MTR-NG is actively developed with focus on:
 - **Rich Visualization**: Unicode sparklines and color coding  
 - **Column Flexibility**: Complete customization system
 - **Interactive UI**: Real-time monitoring with controls
-- **Sixel Graphics**: Advanced terminal graphics (experimental)
 - **IPv6 Support**: Next-generation protocol support (planned)
 
 ## Contributing

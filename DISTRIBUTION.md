@@ -73,7 +73,6 @@ cargo install mtr-ng
 
 ### Optional Dependencies
 - For enhanced terminal support: modern terminal emulator with true color
-- For Sixel graphics: terminal with Sixel support (experimental)
 
 ## Platform Support
 

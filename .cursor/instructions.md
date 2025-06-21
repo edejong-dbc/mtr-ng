@@ -197,6 +197,181 @@ perf report
 
 ---
 
+## Code Cleanup Guidelines
+
+### Mandatory Cleanup Checks
+
+Before any commit, ensure the codebase passes these checks:
+
+```bash
+# 1. Zero compilation warnings
+cargo build --release
+
+# 2. Zero clippy warnings (strict mode)
+cargo clippy --release -- -D warnings
+
+# 3. All tests pass
+cargo test
+
+# 4. Functional verification
+./target/release/mtr-ng google.com --simulate -c 1 -r
+```
+
+### Systematic Cleanup Process
+
+#### 1. **Fix All Linter Warnings**
+- **Unused mut**: Add `#[allow(unused_mut)]` only when variable IS used mutably in async closures
+- **Clippy warnings**: Fix immediately, never ignore
+- **Dead code**: Remove completely, don't just silence warnings
+- **Magic numbers**: Extract to named constants
+
+#### 2. **Remove Unused Code**
+Search and eliminate:
+```bash
+# Find unused imports
+grep -r "^use.*;" src/ | # Manual review needed
+
+# Find unused functions (not called anywhere)
+grep -r "fn.*never_called" src/
+
+# Find unused structs/enums
+grep -r "struct.*Unused\|enum.*Unused" src/
+
+# Find TODO/FIXME comments
+grep -r "TODO\|FIXME\|XXX\|HACK" src/
+```
+
+**Removal Priority:**
+1. **Backup files** (*.backup, *.bak, *.tmp)
+2. **Unused types** (structs, enums never instantiated)
+3. **Unused functions** (never called)
+4. **Unused modules** (not imported)
+5. **Dead code paths** (unreachable code)
+
+#### 3. **Constants and Magic Numbers**
+Replace hardcoded values with named constants:
+```rust
+// Before
+let buffer = [0u8; 1500];
+self.next_seq = 32768;
+
+// After  
+const MAX_MTU: usize = 1500;
+const INITIAL_SEQUENCE: u16 = 32768;
+let buffer = [0u8; MAX_MTU];
+self.next_seq = INITIAL_SEQUENCE;
+```
+
+#### 4. **Import Cleanup**
+- **No wildcard imports**: Use explicit imports instead of `use module::*`
+- **Group imports**: std, external crates, local modules
+- **Remove unused imports**: Let compiler/clippy guide you
+
+```rust
+// Before
+use hickory_resolver::{config::*, TokioAsyncResolver};
+
+// After
+use hickory_resolver::{config::{ResolverConfig, ResolverOpts}, TokioAsyncResolver};
+```
+
+#### 5. **Code Quality Improvements**
+- **Replace `.map()` with `if let`** for unit functions
+- **Use `.to_string()`** instead of `format!("{}", x)`
+- **Prefer explicit error handling** over `.unwrap()`
+- **Add documentation** for public APIs
+
+### Cleanup Verification
+
+After cleanup, verify:
+```bash
+# 1. No warnings
+cargo build --release 2>&1 | grep -E "warning:|error:" | wc -l  # Should be 0
+
+# 2. No clippy issues  
+cargo clippy --release -- -D warnings  # Should pass
+
+# 3. Tests still pass
+cargo test  # All tests green
+
+# 4. Functionality preserved
+./target/release/mtr-ng google.com --simulate -c 1 -r  # Should work
+
+# 5. Real network mode works (if you have sudo)
+sudo ./target/release/mtr-ng 8.8.8.8 -c 1 -r  # Should work
+```
+
+### File-Specific Cleanup Rules
+
+#### **src/session.rs** (CRITICAL)
+- Never remove sequence management logic
+- Keep MTR algorithm fidelity intact
+- Only remove clearly unused helper functions
+- Test real network mode after changes
+
+#### **src/probe.rs**
+- Remove unused packet construction functions
+- Keep core send/receive logic intact
+- Verify ProbeEngine functionality
+
+#### **src/ui.rs**
+- Remove unused visualization modes
+- Keep core rendering functions
+- Test interactive mode after changes
+
+#### **src/hop_stats.rs**
+- Remove unused statistics methods
+- Keep core RTT calculation logic
+- Verify statistics accuracy
+
+### Anti-Patterns to Avoid
+
+❌ **Never do this:**
+- Remove code just because it "looks unused" without verification
+- Ignore clippy warnings with blanket `#[allow]` attributes
+- Leave TODO comments without tickets/issues
+- Keep backup files in the repository
+- Use magic numbers without constants
+
+✅ **Always do this:**
+- Verify unused code is truly unused across all modules
+- Fix clippy warnings properly, don't just silence them
+- Replace magic numbers with named constants
+- Remove backup/temporary files
+- Test functionality after cleanup
+
+### Cleanup Commit Guidelines
+
+Structure cleanup commits like this:
+```
+Code cleanup: fix warnings, remove unused code, add constants
+
+- Fix all clippy warnings (specific issues fixed)
+- Remove unused types: ListSpecificTypes
+- Remove unused functions: ListSpecificFunctions  
+- Remove unused files: ListSpecificFiles (X lines)
+- Add constants: ListNewConstants to replace magic numbers
+- Fix imports: specific import improvements
+- Zero warnings, all tests pass, functionality preserved
+- Removed ~X lines of dead code
+```
+
+### Maintenance Schedule
+
+**Before every commit:**
+- Run `cargo clippy --release -- -D warnings`
+- Check for new unused code
+
+**Weekly cleanup:**
+- Full unused code analysis
+- Magic number extraction
+- Import optimization
+
+**Monthly deep cleanup:**
+- Dependency audit (`cargo audit`)
+- Performance profiling
+- Documentation updates
+
 ## Quick Reference
 
 ### Build Commands:

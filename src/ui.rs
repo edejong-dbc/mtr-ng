@@ -5,7 +5,7 @@
 //! and support for various terminal color modes.
 
 use crate::args::Column;
-use crate::sixel::SixelRenderer;
+
 use crate::SparklineScale;
 use crate::{HopStats, MtrSession, Result};
 use crossterm::{
@@ -15,11 +15,11 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    buffer::Buffer,
+
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Widget},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
     Frame, Terminal,
 };
 use std::{
@@ -40,7 +40,6 @@ pub struct UiState {
     pub color_support: ColorSupport,
     pub columns: Vec<Column>,
     pub current_column_index: usize,
-    pub sixel_renderer: SixelRenderer,
     pub show_help: bool,
     pub visualization_mode: VisualizationMode,
     pub show_hostnames: bool, // Toggle between hostnames and IP addresses
@@ -130,14 +129,13 @@ impl ColumnSelectorState {
 }
 
 impl UiState {
-    pub fn new(scale: SparklineScale, columns: Vec<Column>, enable_sixel: bool) -> Self {
+    pub fn new(scale: SparklineScale, columns: Vec<Column>) -> Self {
         let column_selector_state = ColumnSelectorState::new(&columns);
         Self {
             current_sparkline_scale: scale,
             color_support: detect_color_support(),
             columns,
             current_column_index: 0,
-            sixel_renderer: SixelRenderer::new(enable_sixel),
             show_help: false,
             visualization_mode: VisualizationMode::Sparkline,
             show_hostnames: true, // Start with hostnames enabled by default
@@ -540,42 +538,7 @@ fn calculate_rtt_ratio(
 // Table Components
 // ========================================
 
-/// Table with optional Sixel support
-pub struct EnhancedTable<'a> {
-    table: Table<'a>,
-    sixel_renderer: &'a SixelRenderer,
-    columns: &'a [Column],
-}
 
-impl<'a> EnhancedTable<'a> {
-    pub fn new(table: Table<'a>, sixel_renderer: &'a SixelRenderer, columns: &'a [Column]) -> Self {
-        Self {
-            table,
-            sixel_renderer,
-            columns,
-        }
-    }
-}
-
-impl<'a> Widget for EnhancedTable<'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        self.table.render(area, buf);
-
-        if !self.sixel_renderer.enabled {
-            return;
-        }
-
-        // Add Sixel graphics for Graph column if present
-        if let Some(_graph_col_idx) = self
-            .columns
-            .iter()
-            .position(|col| matches!(col, Column::Graph))
-        {
-            // Sixel rendering logic would go here
-            // For now, skip detailed implementation since it's complex
-        }
-    }
-}
 
 /// Generate table cells for a hop
 fn create_table_cells(
@@ -583,7 +546,6 @@ fn create_table_cells(
     hostname: &str,
     sparkline_spans: &[Span<'static>],
     columns: &[Column],
-    sixel_enabled: bool,
 ) -> Vec<Cell<'static>> {
     columns
         .iter()
@@ -659,9 +621,7 @@ fn create_table_cells(
                     }
                 }
                 Column::Graph => {
-                    if sixel_enabled {
-                        Cell::from("") // Sixel will fill this
-                    } else if !sparkline_spans.is_empty() {
+                    if !sparkline_spans.is_empty() {
                         Cell::from(Line::from(sparkline_spans.to_vec()))
                     } else {
                         Cell::from("")
@@ -1140,7 +1100,6 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
             &hostname,
             &graph_spans,
             &ui_state.columns,
-            ui_state.sixel_renderer.enabled,
         );
 
         rows.push(Row::new(cells));
@@ -1198,13 +1157,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     let constraints = create_column_constraints(&ui_state.columns);
     let table = Table::new(rows, &constraints).header(header);
 
-    // Use enhanced table for Sixel support
-    if ui_state.sixel_renderer.enabled {
-        let enhanced_table = EnhancedTable::new(table, &ui_state.sixel_renderer, &ui_state.columns);
-        f.render_widget(enhanced_table, chunks[1]);
-    } else {
-        f.render_widget(table, chunks[1]);
-    }
+    f.render_widget(table, chunks[1]);
 
     // Compact scale visualization
     let scale_widget = create_scale_widget(
@@ -1349,7 +1302,6 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
     let mut ui_state = UiState::new(
         session.args.sparkline_scale,
         session.args.get_columns(),
-        session.args.sixel,
     );
 
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<()>();

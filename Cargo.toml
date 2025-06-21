@@ -90,8 +90,6 @@ nix = { version = "0.28", default-features = false, features = ["net", "poll"] }
 # DNS resolution - migrated from trust-dns (unmaintained) to hickory-dns
 hickory-resolver = "0.24"
 
-# Sixel graphics (manual implementation)
-
 [dev-dependencies]
 tokio-test = "0.4"
 
