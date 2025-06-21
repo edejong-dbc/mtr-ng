@@ -117,7 +117,20 @@ pub async fn run_report(mut session: MtrSession) -> Result<()> {
         format_column_headers(&columns)
     );
 
-    for hop in &session.hops {
+    // Determine how many hops to display based on discovery or organic growth  
+    let max_hops_to_display = if session.num_hosts > 0 {
+        session.num_hosts
+    } else {
+        // Show all hops that have been probed
+        session.hops.iter()
+            .enumerate()
+            .rev()
+            .find(|(_, hop)| hop.sent > 0)
+            .map(|(i, _)| i + 1)
+            .unwrap_or(0)
+    };
+    
+    for hop in session.hops.iter().take(max_hops_to_display) {
         if hop.sent == 0 {
             continue;
         }

@@ -181,11 +181,12 @@ impl UiState {
         // Ensure at least one column remains
         if self.columns.is_empty() {
             self.columns.push(Column::Host);
-            self.column_selector_state
+            if let Some((_, enabled)) = self.column_selector_state
                 .available_columns
                 .iter_mut()
-                .find(|(col, _)| matches!(col, Column::Host))
-                .map(|(_, enabled)| *enabled = true);
+                .find(|(col, _)| matches!(col, Column::Host)) {
+                *enabled = true;
+            }
         }
     }
 
@@ -834,7 +835,7 @@ fn create_column_selector_popup(state: &ColumnSelectorState) -> Paragraph<'stati
                     checkbox_style
                 },
             ),
-            Span::styled(format!("{}", column_name), style),
+            Span::styled(column_name.to_string(), style),
         ]));
     }
 
@@ -1097,7 +1098,21 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
 
     let mut rows = Vec::new();
 
-    for hop in session.hops.iter().filter(|hop| hop.sent > 0) {
+    // Determine how many hops to display based on discovery or organic growth
+    let max_hops_to_display = if session.num_hosts > 0 {
+        session.num_hosts
+    } else {
+        // Organic discovery: show hops up to the furthest one with data
+        session.hops.iter()
+            .enumerate()
+            .rev()
+            .find(|(_, hop)| hop.sent > 0 || hop.addr.is_some())
+            .map(|(i, _)| i + 1)
+            .unwrap_or(0)
+            .max(8) // Show at least 8 hops to see progress
+    };
+    
+    for hop in session.hops.iter().take(max_hops_to_display).filter(|hop| hop.sent > 0) {
         let hostname = format_hostname(session, hop, ui_state);
         let graph_width = calculate_graph_width(&chunks[1], &ui_state.columns);
 

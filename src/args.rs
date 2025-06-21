@@ -7,6 +7,16 @@ pub enum SparklineScale {
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq)]
+pub enum ProbeProtocol {
+    /// ICMP Echo (ping) - default and most common
+    Icmp,
+    /// UDP probes (useful for firewalls that block ICMP)
+    Udp,
+    /// TCP SYN probes (useful for strict firewalls)
+    Tcp,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq)]
 pub enum Column {
     /// Hop number
     Hop,
@@ -159,6 +169,10 @@ pub struct Args {
     /// Enable simulation mode (generate fake network data for testing/demo)
     #[arg(long, help = "Run in simulation mode with fake network data")]
     pub simulate: bool,
+
+    /// Probe protocol to use for measurements  
+    #[arg(short = 'P', long, value_enum, default_value = "icmp")]
+    pub protocol: ProbeProtocol,
 }
 
 impl Args {

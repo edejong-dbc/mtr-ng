@@ -69,6 +69,12 @@ pub struct HopStats {
     // Multi-path tracking
     pub alternate_paths: HashMap<IpAddr, AlternatePath>,
     pub path_frequency: HashMap<IpAddr, usize>,
+    
+    // Target tracking
+    pub is_target: bool,
+    
+    // ICMP error tracking (for MTR algorithm compatibility)
+    pub icmp_error: bool,
 }
 
 impl HopStats {
@@ -93,6 +99,8 @@ impl HopStats {
             ema_alpha: 0.1,
             alternate_paths: HashMap::new(),
             path_frequency: HashMap::new(),
+            is_target: false,
+            icmp_error: false,
         }
     }
 
@@ -330,6 +338,21 @@ impl HopStats {
     /// Typical values for network monitoring: 0.1-0.3
     pub fn set_ema_alpha(&mut self, alpha: f64) {
         self.ema_alpha = alpha.clamp(0.0, 1.0);
+    }
+    
+    /// Mark this hop as containing the target destination
+    pub fn mark_as_target(&mut self) {
+        self.is_target = true;
+    }
+    
+    /// Check if this hop has returned an ICMP error (like original MTR)
+    pub fn has_icmp_error(&self) -> bool {
+        self.icmp_error
+    }
+    
+    /// Mark this hop as having an ICMP error
+    pub fn set_icmp_error(&mut self) {
+        self.icmp_error = true;
     }
 }
 

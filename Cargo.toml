@@ -85,6 +85,7 @@ rand = "0.8"
 
 # Raw socket operations
 libc = "0.2"
+nix = { version = "0.28", default-features = false, features = ["net", "poll"] }
 
 # DNS resolution - migrated from trust-dns (unmaintained) to hickory-dns
 hickory-resolver = "0.24"
