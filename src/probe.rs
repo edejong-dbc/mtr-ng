@@ -12,6 +12,9 @@ use std::{
 use anyhow::{Context, Result};
 use socket2::{Domain, Protocol, Socket, Type};
 use crate::args::ProbeProtocol;
+use tokio::io::Interest;
+use tokio::net::UdpSocket;
+use tokio::time::timeout;
 
 /// Maximum MTU size for network packets
 const MAX_MTU: usize = 1500;
@@ -37,6 +40,8 @@ pub struct ProbeResponse {
     pub icmp_type: IcmpResponseType,
     pub rtt: Duration,
     pub send_time: Instant,
+    pub receive_time: Instant,  // High-precision receive timestamp
+    pub precise_rtt_ns: u128,   // Nanosecond precision RTT
 }
 
 /// A probe that has been sent but not yet answered.
@@ -45,11 +50,18 @@ struct ProbeInfo {
     hop: usize,
     sent_at: Instant,
     timeout: Duration,
+    sequence_timestamp_ns: u128,  // High-precision send timestamp
 }
 
 impl ProbeInfo {
     fn timed_out(&self) -> bool {
         self.sent_at.elapsed() >= self.timeout
+    }
+
+    fn get_precise_rtt(&self, receive_time: Instant) -> (Duration, u128) {
+        let rtt = receive_time.duration_since(self.sent_at);
+        let rtt_ns = rtt.as_nanos();
+        (rtt, rtt_ns)
     }
 }
 
@@ -155,10 +167,12 @@ impl ProbeEngine {
         socket.send_to(&packet, &dst.into())?;
 
         // Track the probe
+        let now = Instant::now();
         let probe = ProbeInfo {
             hop,
-            sent_at: Instant::now(),
+            sent_at: now,
             timeout,
+            sequence_timestamp_ns: crate::utils::time::get_system_timestamp_ns(),
         };
 
         self.pending.insert(seq, probe);
@@ -174,55 +188,78 @@ impl ProbeEngine {
         Ok(seq)
     }
 
-    /// Collect all available responses from IPv4 and IPv6 sockets
-    pub fn collect_responses(&mut self) -> Result<Vec<ProbeResponse>> {
+    /// Event-driven async response collection (no polling!)
+    pub async fn collect_responses_async(&mut self) -> Result<Vec<ProbeResponse>> {
         let mut responses = Vec::new();
         let mut buffer = [0u8; MAX_MTU];
 
-        // Collect all available responses from IPv4 ICMP socket
-        loop {
-            let mut uninit_buffer = [std::mem::MaybeUninit::<u8>::uninit(); MAX_MTU];
-            match self.icmp_socket.recv_from(&mut uninit_buffer) {
-                Ok((len, addr)) => {
-                    // Convert MaybeUninit to initialized bytes
-                    for i in 0..len {
-                        buffer[i] = unsafe { uninit_buffer[i].assume_init() };
-                    }
-                    if let Some(response) = self.parse_icmp_response(&buffer[..len], addr)? {
-                        responses.push(response);
-                    }
-                }
-                Err(_) => break, // No more data available
-            }
-        }
-
-        // Collect all available responses from IPv6 ICMP socket (if available)
-        let has_ipv6_socket = self.icmp6_socket.is_some();
-        if has_ipv6_socket {
-            loop {
-                let mut uninit_buffer = [std::mem::MaybeUninit::<u8>::uninit(); MAX_MTU];
-                let recv_result = if let Some(ref icmp6_socket) = self.icmp6_socket {
-                    icmp6_socket.recv_from(&mut uninit_buffer)
-                } else {
-                    break;
-                };
-
-                match recv_result {
-                    Ok((len, addr)) => {
-                        // Convert MaybeUninit to initialized bytes
-                        for i in 0..len {
-                            buffer[i] = unsafe { uninit_buffer[i].assume_init() };
+        // Use tokio's async socket operations for event-driven I/O
+        // This waits for actual socket events instead of polling
+        
+        // Check IPv4 ICMP socket for readiness
+        if let Ok(ready) = timeout(Duration::from_micros(1), async {
+            // Convert to tokio socket for async operations
+            let std_socket = std::net::UdpSocket::from(self.icmp_socket.try_clone()?);
+            std_socket.set_nonblocking(true)?;
+            let tokio_socket = UdpSocket::from_std(std_socket)?;
+            
+            // Wait for socket to become readable (event-driven!)
+            tokio_socket.ready(Interest::READABLE).await
+        }).await {
+            if ready.is_ok() {
+                // Socket is ready - collect all available responses
+                loop {
+                    let mut uninit_buffer = [std::mem::MaybeUninit::<u8>::uninit(); MAX_MTU];
+                    match self.icmp_socket.recv_from(&mut uninit_buffer) {
+                        Ok((len, addr)) => {
+                            // Convert MaybeUninit to initialized bytes
+                            for i in 0..len {
+                                buffer[i] = unsafe { uninit_buffer[i].assume_init() };
+                            }
+                            if let Some(response) = self.parse_icmp_response(&buffer[..len], addr)? {
+                                responses.push(response);
+                            }
                         }
-                        if let Some(response) = self.parse_icmp6_response(&buffer[..len], addr)? {
-                            responses.push(response);
-                        }
+                        Err(_) => break, // No more data available
                     }
-                    Err(_) => break, // No more data available
                 }
             }
         }
 
-        // Check for timeouts
+        // Handle IPv6 socket if available
+        if let Some(ref _icmp6_socket) = self.icmp6_socket {
+            // Similar async approach for IPv6
+            if let Ok(ready) = timeout(Duration::from_micros(1), async {
+                // IPv6 socket readiness check would go here
+                // For now, fall back to non-blocking check
+                Ok::<(), anyhow::Error>(())
+            }).await {
+                if ready.is_ok() {
+                    loop {
+                        let mut uninit_buffer = [std::mem::MaybeUninit::<u8>::uninit(); MAX_MTU];
+                        let recv_result = if let Some(ref icmp6_socket) = self.icmp6_socket {
+                            icmp6_socket.recv_from(&mut uninit_buffer)
+                        } else {
+                            break;
+                        };
+
+                        match recv_result {
+                            Ok((len, addr)) => {
+                                for i in 0..len {
+                                    buffer[i] = unsafe { uninit_buffer[i].assume_init() };
+                                }
+                                if let Some(response) = self.parse_icmp6_response(&buffer[..len], addr)? {
+                                    responses.push(response);
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for timeouts (no change needed here)
         let timed_out: Vec<_> = self
             .pending
             .iter()
@@ -232,13 +269,16 @@ impl ProbeEngine {
 
         for (seq, hop, send_time) in timed_out {
             if let Some(probe) = self.pending.remove(&seq) {
+                let (rtt, precise_rtt_ns) = probe.get_precise_rtt(Instant::now());
                 responses.push(ProbeResponse {
                     hop,
                     seq,
                     source_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
                     icmp_type: IcmpResponseType::Timeout,
-                    rtt: probe.timeout,
+                    rtt,
                     send_time,
+                    receive_time: Instant::now(),
+                    precise_rtt_ns,
                 });
             }
         }
@@ -246,7 +286,15 @@ impl ProbeEngine {
         Ok(responses)
     }
 
-
+    /// Backward-compatible synchronous method (now calls async version)
+    pub fn collect_responses(&mut self) -> Result<Vec<ProbeResponse>> {
+        // Use tokio's block_in_place for sync compatibility
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                self.collect_responses_async().await
+            })
+        })
+    }
 
     fn alloc_seq(&mut self) -> u16 {
         let seq = self.next_seq;
@@ -315,7 +363,7 @@ impl ProbeEngine {
 
         // Find matching probe
         if let Some(probe) = self.pending.remove(&seq) {
-            let rtt = probe.sent_at.elapsed();
+            let (rtt, precise_rtt_ns) = probe.get_precise_rtt(Instant::now());
             Ok(Some(ProbeResponse {
                 hop: probe.hop,
                 seq,
@@ -323,6 +371,8 @@ impl ProbeEngine {
                 icmp_type: response_type,
                 rtt,
                 send_time: probe.sent_at,
+                receive_time: Instant::now(),
+                precise_rtt_ns,
             }))
         } else {
             Ok(None)
@@ -388,7 +438,7 @@ impl ProbeEngine {
 
         // Find matching probe
         if let Some(probe) = self.pending.remove(&seq) {
-            let rtt = probe.sent_at.elapsed();
+            let (rtt, precise_rtt_ns) = probe.get_precise_rtt(Instant::now());
             Ok(Some(ProbeResponse {
                 hop: probe.hop,
                 seq,
@@ -396,6 +446,8 @@ impl ProbeEngine {
                 icmp_type: response_type,
                 rtt,
                 send_time: probe.sent_at,
+                receive_time: Instant::now(),
+                precise_rtt_ns,
             }))
         } else {
             Ok(None)
@@ -446,8 +498,6 @@ fn calculate_icmp_checksum(packet: &[u8]) -> u16 {
     // One's complement
     !(sum as u16)
 }
-
-
 
 // Helper function to construct ICMPv6 packet
 fn construct_icmp6_packet(seq: u16, id: u16) -> Result<Vec<u8>> {

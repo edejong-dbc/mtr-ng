@@ -1,3 +1,4 @@
+use crate::utils;
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
@@ -75,6 +76,15 @@ pub struct HopStats {
     
     // ICMP error tracking (for MTR algorithm compatibility)
     pub icmp_error: bool,
+
+    /// Real-time timing statistics tracker
+    pub timing_stats: Option<crate::utils::time::TimingStats>,
+    /// High-precision RTT values in nanoseconds for detailed analysis
+    pub precise_rtts_ns: VecDeque<u128>,
+    /// Real-time jitter detection threshold (default 2.0 = 200% spike)
+    pub jitter_threshold: f64,
+    /// Timing anomaly counter
+    pub timing_anomalies: usize,
 }
 
 impl HopStats {
@@ -101,6 +111,10 @@ impl HopStats {
             path_frequency: HashMap::new(),
             is_target: false,
             icmp_error: false,
+            timing_stats: None,
+            precise_rtts_ns: VecDeque::new(),
+            jitter_threshold: 2.0,
+            timing_anomalies: 0,
         }
     }
 
@@ -203,14 +217,39 @@ impl HopStats {
     pub fn add_rtt(&mut self, rtt: Duration) {
         self.received += 1;
 
+        // Initialize timing stats if not already done
+        if self.timing_stats.is_none() {
+            self.timing_stats = Some(utils::time::TimingStats::new());
+        }
+
+        // Update real-time timing statistics
+        if let Some(ref mut stats) = self.timing_stats {
+            stats.update(rtt);
+        }
+
+        // Store high-precision nanosecond values
+        let rtt_ns = rtt.as_nanos();
+        self.precise_rtts_ns.push_back(rtt_ns);
+        if self.precise_rtts_ns.len() > 100 {
+            self.precise_rtts_ns.pop_front();
+        }
+
         // Calculate jitter BEFORE updating last_rtt (need previous value)
         // Jitter = |current_rtt - previous_rtt|
         if let Some(prev_rtt) = self.last_rtt {
-            let jitter = if rtt > prev_rtt {
-                rtt - prev_rtt
-            } else {
-                prev_rtt - rtt
-            };
+            let jitter = utils::time::calculate_timing_jitter(rtt, prev_rtt);
+
+            // Detect timing anomalies using real-time analysis
+            if utils::time::detect_timing_anomaly(rtt, prev_rtt, self.jitter_threshold) {
+                self.timing_anomalies += 1;
+                tracing::warn!(
+                    "Timing anomaly detected: hop={}, current={:.1}ms, previous={:.1}ms, factor={:.2}",
+                    self.hop,
+                    utils::time::duration_to_ms_f64(rtt),
+                    utils::time::duration_to_ms_f64(prev_rtt),
+                    utils::time::duration_to_ms_f64(rtt) / utils::time::duration_to_ms_f64(prev_rtt)
+                );
+            }
 
             self.last_jitter = Some(jitter);
             self.jitters.push_back(jitter);
@@ -220,15 +259,20 @@ impl HopStats {
                 self.jitters.pop_front();
             }
 
-            // Calculate mean jitter
-            let jitter_sum: Duration = self.jitters.iter().sum();
-            self.jitter_avg = Some(jitter_sum / self.jitters.len() as u32);
+            // Calculate mean jitter using high-precision moving average
+            if let Some(avg_jitter) = utils::time::calculate_timing_moving_average(
+                &self.jitters.iter().cloned().collect::<Vec<_>>(), 
+                self.jitters.len()
+            ) {
+                self.jitter_avg = Some(avg_jitter);
+            }
 
             tracing::debug!(
-                "Jitter: hop={}, current_jitter={:.1}ms, avg_jitter={:.1}ms",
+                "Jitter: hop={}, current_jitter={:.1}ms, avg_jitter={:.1}ms, precise_rtt={}ns",
                 self.hop,
-                jitter.as_secs_f64() * 1000.0,
-                self.jitter_avg.unwrap().as_secs_f64() * 1000.0
+                utils::time::duration_to_ms_f64(jitter),
+                utils::time::duration_to_ms_f64(self.jitter_avg.unwrap_or_default()),
+                rtt_ns
             );
         }
 
@@ -251,7 +295,7 @@ impl HopStats {
             "add_rtt: hop={}, received={}, rtt={:.1}ms",
             self.hop,
             self.received,
-            rtt.as_secs_f64() * 1000.0
+            utils::time::duration_to_ms_f64(rtt)
         );
 
         // Update statistics
@@ -266,22 +310,8 @@ impl HopStats {
         let sum: Duration = self.rtts.iter().sum();
         self.avg_rtt = Some(sum / self.rtts.len() as u32);
 
-        // Calculate exponential moving average
-        // EMA = α * current_value + (1 - α) * previous_ema
-        // For first value, EMA = current_value
-        match self.ema_rtt {
-            None => {
-                // First RTT measurement - initialize EMA
-                self.ema_rtt = Some(rtt);
-            }
-            Some(prev_ema) => {
-                // Apply exponential smoothing formula
-                let rtt_ms = rtt.as_secs_f64() * 1000.0;
-                let prev_ema_ms = prev_ema.as_secs_f64() * 1000.0;
-                let new_ema_ms = self.ema_alpha * rtt_ms + (1.0 - self.ema_alpha) * prev_ema_ms;
-                self.ema_rtt = Some(Duration::from_secs_f64(new_ema_ms / 1000.0));
-            }
-        }
+        // Calculate exponential moving average using high-precision timing
+        self.ema_rtt = Some(utils::time::calculate_timing_ema(rtt, self.ema_rtt, self.ema_alpha));
 
         self.update_loss_percent();
     }
@@ -307,7 +337,7 @@ impl HopStats {
     pub fn update_loss_percent(&mut self) {
         if self.sent > 0 {
             // Ensure received can't exceed sent to prevent overflow
-            let actual_received = self.received.min(self.sent);
+            let actual_received = utils::math::min_with_safety(self.received, self.sent);
             self.loss_percent = ((self.sent - actual_received) as f64 / self.sent as f64) * 100.0;
         }
     }
@@ -337,7 +367,7 @@ impl HopStats {
     /// Values closer to 0.0 make the average more stable and less sensitive to spikes
     /// Typical values for network monitoring: 0.1-0.3
     pub fn set_ema_alpha(&mut self, alpha: f64) {
-        self.ema_alpha = alpha.clamp(0.0, 1.0);
+        self.ema_alpha = utils::math::clamp_ratio(alpha);
     }
     
     /// Mark this hop as containing the target destination
@@ -592,12 +622,12 @@ mod tests {
 
         // Second RTT: EMA = 0.5 * 200 + 0.5 * 100 = 150
         hop.add_rtt(Duration::from_millis(200));
-        let ema_ms = (hop.ema_rtt.unwrap().as_secs_f64() * 1000.0).round() as u64;
+        let ema_ms = utils::time::duration_to_ms_u64(hop.ema_rtt.unwrap());
         assert_eq!(ema_ms, 150);
 
         // Third RTT: EMA = 0.5 * 100 + 0.5 * 150 = 125
         hop.add_rtt(Duration::from_millis(100));
-        let ema_ms = (hop.ema_rtt.unwrap().as_secs_f64() * 1000.0).round() as u64;
+        let ema_ms = utils::time::duration_to_ms_u64(hop.ema_rtt.unwrap());
         assert_eq!(ema_ms, 125);
     }
 
@@ -642,7 +672,7 @@ mod tests {
         hop.add_rtt(Duration::from_millis(150));
         assert_eq!(hop.last_jitter, Some(Duration::from_millis(40))); // |150 - 110| = 40
                                                                       // Average of jitter values: (20 + 10 + 40) / 3 = 23.333... ms
-        let expected_avg_ms = (hop.jitter_avg.unwrap().as_secs_f64() * 1000.0).round() as u64;
+        let expected_avg_ms = utils::time::duration_to_ms_u64(hop.jitter_avg.unwrap());
         assert_eq!(expected_avg_ms, 23); // Rounded to nearest ms
         assert_eq!(hop.jitters.len(), 3);
     }

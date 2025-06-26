@@ -1,4 +1,4 @@
-use crate::{Args, HopStats, Result};
+use crate::{Args, HopStats, Result, utils};
 use crate::probe::{ProbeEngine, ProbeResponse, IcmpResponseType};
 use anyhow::anyhow;
 use hickory_resolver::{config::{ResolverConfig, ResolverOpts}, TokioAsyncResolver};
@@ -97,8 +97,13 @@ impl MtrSession {
     }
 
     async fn run_ipv4_trace(&mut self, target: Ipv4Addr) -> Result<()> {
-        if self.args.simulate {
-            info!("Running in simulation mode (--simulate flag enabled)");
+        if self.args.simulate || self.args.force_simulate {
+            let reason = if self.args.force_simulate {
+                "--force-simulate flag enabled"
+            } else {
+                "--simulate flag enabled"
+            };
+            info!("Running in simulation mode ({})", reason);
             return self.run_simulated_trace().await;
         }
 
@@ -176,9 +181,9 @@ impl MtrSession {
         // Send probes to all hops in parallel (like simulation mode)
         // This is the correct MTR algorithm - not incremental discovery
         let max_hops = if self.num_hosts > 0 {
-            self.num_hosts.min(self.args.max_hops as usize)
+            utils::math::min_with_safety(self.num_hosts, self.args.max_hops as usize)
             } else {
-            10.min(self.args.max_hops as usize) // Start with reasonable number
+            utils::math::min_with_safety(10, self.args.max_hops as usize) // Start with reasonable number
         };
 
         // Send all probes rapidly in succession
@@ -220,38 +225,55 @@ impl MtrSession {
         Ok(())
     }
 
-    // ProbeEngine-based equivalent of net_process_return - optimized
+    // Event-driven response collection (no polling!)
     async fn net_process_return_with_probe_engine(
         &mut self,
         probe_engine: &mut ProbeEngine,
         target: Ipv4Addr,
         _collect_duration: Duration,
     ) {
-        // Use efficient response collection with reasonable timeout
-        // Don't wait the full interval - collect quickly and exit when done
         let start_collect = Instant::now();
-        let max_wait = Duration::from_millis(200); // Much shorter maximum wait
+        let max_wait = Duration::from_millis(50);
         let mut total_responses = 0;
-        let mut no_response_cycles = 0;
 
-        while start_collect.elapsed() < max_wait && no_response_cycles < 20 {
-            let batch_responses = probe_engine.collect_responses().unwrap_or_default();
-            total_responses += batch_responses.len();
+        // Use tokio::select for event-driven I/O instead of polling
+        loop {
+            if start_collect.elapsed() >= max_wait {
+                break;
+            }
 
-            if batch_responses.is_empty() {
-                no_response_cycles += 1;
-                // Very short delay between checks
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            } else {
-                no_response_cycles = 0; // Reset counter when we get responses
-                
-                for response in batch_responses {
-                    self.process_probe_response(response, target).await;
+            tokio::select! {
+                // Event-driven response collection
+                result = probe_engine.collect_responses_async() => {
+                    match result {
+                        Ok(batch_responses) => {
+                            if batch_responses.is_empty() {
+                                // No responses available, yield briefly to other tasks
+                                tokio::task::yield_now().await;
+                            } else {
+                                total_responses += batch_responses.len();
+                                for response in batch_responses {
+                                    self.process_probe_response(response, target).await;
+                                }
+                                // Continue immediately if we got responses
+                                continue;
+                            }
+                        }
+                        Err(_) => {
+                            // Error in collection, yield and continue
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                }
+                // Timeout fallback to prevent infinite waiting
+                _ = tokio::time::sleep(Duration::from_micros(500)) => {
+                    // Cooperative yielding instead of busy polling
+                    tokio::task::yield_now().await;
                 }
             }
         }
         
-        debug!("Collected {} responses in {:?}", total_responses, start_collect.elapsed());
+        debug!("Collected {} responses in {:?} (event-driven)", total_responses, start_collect.elapsed());
     }
 
     // Process individual probe responses
@@ -341,6 +363,12 @@ impl MtrSession {
             self.next_sequence = MIN_SEQUENCE;
         }
         self.hops[index].increment_sent();
+        
+        // Trigger UI update immediately when packet is sent (shows waiting state)
+        if let Some(ref callback) = self.update_callback {
+            callback();
+        }
+        
         seq
     }
 
@@ -366,7 +394,7 @@ impl MtrSession {
                 // Simulate realistic network behavior
                 let base_latency = hop.hop as u64 * 10 + 20; // Base latency increases with hops
                 let jitter = rand::random::<u64>() % 50; // Random jitter
-                let packet_loss_chance = (hop.hop as f64 * 0.05).min(0.25); // Higher loss chance for testing
+                let packet_loss_chance = utils::math::clamp_f64(hop.hop as f64 * 0.05, 0.0, 0.25); // Higher loss chance for testing
 
                 if rand::random::<f64>() > packet_loss_chance {
                     let rtt = Duration::from_millis(base_latency + jitter);
@@ -435,8 +463,13 @@ impl MtrSession {
 
         info!("Starting real-time trace to {}", target_addr);
 
-         if args.simulate {
-             info!("Running in simulation mode (--simulate flag enabled)");
+         if args.simulate || args.force_simulate {
+             let reason = if args.force_simulate {
+                 "--force-simulate flag enabled"
+             } else {
+                 "--simulate flag enabled"
+             };
+             info!("Running in simulation mode ({})", reason);
              return Self::run_simulated_trace_realtime(session_arc, args).await;
          }
 
@@ -469,9 +502,9 @@ impl MtrSession {
     ) -> Result<()> {
          info!("Starting real network trace with channels (real-time UI)");
          
-         // Create channel for communication between probe task and UI
-         #[allow(unused_mut)]
-         let (response_tx, mut response_rx) = mpsc::unbounded_channel::<ProbeResponse>();
+         // Create channels for communication between probe task and UI
+         let (response_tx, response_rx) = mpsc::unbounded_channel::<ProbeResponse>();
+         let (sent_tx, sent_rx) = mpsc::unbounded_channel::<usize>(); // hop index when packet sent
          
          // Clone session for probe task
          let probe_session_arc = Arc::clone(&session_arc);
@@ -479,12 +512,12 @@ impl MtrSession {
          
          // Spawn probe task that runs independently
          let probe_handle = tokio::spawn(async move {
-             Self::run_probe_task(probe_session_arc, target, probe_engine, probe_args, response_tx).await
+             Self::run_probe_task(probe_session_arc, target, probe_engine, probe_args, response_tx, sent_tx).await
          });
          
-         // UI task processes responses from channel without blocking probe timing
+         // UI task processes both sent notifications and responses
          let ui_handle = tokio::spawn(async move {
-             Self::run_ui_response_processor(session_arc, response_rx).await
+             Self::run_ui_processor_with_sent_notifications(session_arc, response_rx, sent_rx).await
          });
          
          // Wait for both tasks
@@ -503,13 +536,14 @@ impl MtrSession {
          mut probe_engine: ProbeEngine,
         args: Args,
          response_tx: mpsc::UnboundedSender<ProbeResponse>,
+         sent_tx: mpsc::UnboundedSender<usize>,
     ) -> Result<()> {
-         let max_hops = 10.min(args.max_hops as usize);
+         let max_hops = utils::math::min_with_safety(10, args.max_hops as usize);
          info!("Probe task starting with {} max hops", max_hops);
          
          // Spawn continuous response listener task
          #[allow(unused_mut)]
-         let (probe_tx, mut probe_rx) = mpsc::unbounded_channel();
+         let (probe_tx, probe_rx) = mpsc::unbounded_channel();
          let listener_response_tx = response_tx.clone();
          
          let listener_handle = tokio::spawn(async move {
@@ -518,17 +552,22 @@ impl MtrSession {
          
          // Main probe sending loop
          let sender_handle = tokio::spawn(async move {
-        let mut round = 0;
-             
-        loop {
-            if let Some(count) = args.count {
-                if round >= count {
-                    break;
-                }
-                 }
+             let mut round = 0;
                  
+             loop {
+                 if let Some(count) = args.count {
+                     if round >= count {
+                         break;
+                     }
+                 }
+                     
                  // Send all probes for this round
                  for i in 0..max_hops {
+                     // Notify UI that packet is being sent (shows waiting state)
+                     if sent_tx.send(i).is_err() {
+                         return Ok::<(), anyhow::Error>(());
+                     }
+                     
                      let dest = SocketAddr::new(target.into(), 0);
                      let ttl = (i + 1) as u8;
                      let timeout = Duration::from_millis(5000);
@@ -546,7 +585,7 @@ impl MtrSession {
              }
              
              info!("Probe sender completed {} rounds", round);
-        Ok(())
+             Ok(())
          });
          
          // Wait for both tasks
@@ -557,7 +596,7 @@ impl MtrSession {
          Ok(())
      }
      
-     // Continuous async response listener - tracks sequence numbers properly
+     // Pure event-driven async response listener (zero polling!)
      async fn run_response_listener(
          mut probe_engine: ProbeEngine,
          mut probe_rx: mpsc::UnboundedReceiver<(usize, SocketAddr, u8, Duration, usize)>, // (hop, dest, ttl, timeout, round)
@@ -569,7 +608,7 @@ impl MtrSession {
          
          loop {
              tokio::select! {
-                 // Handle probe send requests
+                 // Handle probe send requests (channel-driven)
                  probe_request = probe_rx.recv() => {
                      if let Some((hop, dest, ttl, timeout, round)) = probe_request {
                          match probe_engine.send_probe(hop, dest, ttl, timeout) {
@@ -585,26 +624,32 @@ impl MtrSession {
                      }
                  }
                  
-                 // Continuously collect responses
-                 _ = tokio::time::sleep(Duration::from_millis(10)) => {
-                     let responses = probe_engine.collect_responses().unwrap_or_default();
-                     
-                     for response in responses {
-                         // Check if this sequence belongs to a known round
-                         if let Some((expected_hop, round)) = sent_sequences.remove(&response.seq) {
-                             if expected_hop == response.hop {
-                                 debug!("Valid response: hop={}, round={}, seq={}, rtt={:?}", 
-                                       response.hop + 1, round + 1, response.seq, response.rtt);
-                             } else {
-                                 debug!("WARNING: Hop mismatch - expected {}, got {}", expected_hop + 1, response.hop + 1);
+                 // Event-driven response collection (no sleep!)
+                 result = probe_engine.collect_responses_async() => {
+                     match result {
+                         Ok(responses) => {
+                             for response in responses {
+                                 // Check if this sequence belongs to a known round
+                                 if let Some((expected_hop, round)) = sent_sequences.remove(&response.seq) {
+                                     if expected_hop == response.hop {
+                                         debug!("Valid response: hop={}, round={}, seq={}, rtt={:?}", 
+                                               response.hop + 1, round + 1, response.seq, response.rtt);
+                                     } else {
+                                         debug!("WARNING: Hop mismatch - expected {}, got {}", expected_hop + 1, response.hop + 1);
+                                     }
+                                     
+                                     if response_tx.send(response).is_err() {
+                                         return Ok(());
+                                     }
+                                 } else {
+                                     debug!("OUT-OF-ORDER/LATE: seq={}, hop={}, rtt={:?} - no matching sent probe", 
+                                           response.seq, response.hop + 1, response.rtt);
+                                 }
                              }
-                             
-                             if response_tx.send(response).is_err() {
-                                 return Ok(());
-                             }
-                         } else {
-                             debug!("OUT-OF-ORDER/LATE: seq={}, hop={}, rtt={:?} - no matching sent probe", 
-                                   response.seq, response.hop + 1, response.rtt);
+                         }
+                         Err(_) => {
+                             // Brief yield on error to prevent tight error loops
+                             tokio::task::yield_now().await;
                          }
                      }
                  }
@@ -615,134 +660,219 @@ impl MtrSession {
          Ok(())
      }
      
-     // UI response processor - handles responses without affecting probe timing
-     async fn run_ui_response_processor(
+     // UI processor - handles both sent notifications and responses for real-time updates
+     async fn run_ui_processor_with_sent_notifications(
          session_arc: std::sync::Arc<std::sync::Mutex<Self>>,
          mut response_rx: mpsc::UnboundedReceiver<ProbeResponse>,
+         mut sent_rx: mpsc::UnboundedReceiver<usize>,
      ) -> Result<()> {
-         let mut probe_count = 0;
+                    let mut _probe_count = 0;
          
-         while let Some(response) = response_rx.recv().await {
-             let mut session = session_arc.lock().unwrap();
-             let hop_index = response.hop;
-             
-             if hop_index < session.hops.len() {
-                 // Increment sent count for accurate statistics
-                 if response.icmp_type != IcmpResponseType::Timeout {
-                     probe_count += 1;
-                     if probe_count % 10 == 1 { // Every new round
-                         for hop in &mut session.hops {
-                             hop.increment_sent();
+         loop {
+             tokio::select! {
+                 // Handle packet sent notifications (shows waiting state)
+                 sent_hop = sent_rx.recv() => {
+                     match sent_hop {
+                         Some(hop_index) => {
+                             let should_update = {
+                                 let mut session = session_arc.lock().unwrap();
+                                 if hop_index < session.hops.len() {
+                                     session.hops[hop_index].increment_sent();
+                                     session.update_callback.is_some()
+                                 } else {
+                                     false
+                                 }
+                             };
+                             
+                             // Trigger UI update immediately when packet is sent
+                             if should_update {
+                                 let session = session_arc.lock().unwrap();
+                                 if let Some(ref callback) = session.update_callback {
+                                     callback();
+                                 }
+                             }
+                         }
+                         None => {
+                             // Sender closed, but continue processing responses
+                             break;
                          }
                      }
                  }
                  
-                 match response.icmp_type {
-                     IcmpResponseType::TimeExceeded | IcmpResponseType::EchoReply => {
-                         // RTT is calculated in ProbeEngine when response arrives - no timing corruption!
-                         session.hops[hop_index].add_rtt_from_addr(response.source_addr, response.rtt);
-                         debug!("UI: Hop {} RTT: {:?} from {}", hop_index + 1, response.rtt, response.source_addr);
-                     }
-                     IcmpResponseType::DestinationUnreachable => {
-                         session.hops[hop_index].set_icmp_error();
-                         if session.hops[hop_index].addr.is_none() {
-                             session.hops[hop_index].addr = Some(response.source_addr);
+                 // Handle packet responses (shows actual RTT)
+                 response_result = response_rx.recv() => {
+                     match response_result {
+                         Some(response) => {
+                             let should_trigger_update = {
+                                 let mut session = session_arc.lock().unwrap();
+                                 let hop_index = response.hop;
+                                 
+                                 if hop_index < session.hops.len() {
+                                     match response.icmp_type {
+                                         IcmpResponseType::TimeExceeded | IcmpResponseType::EchoReply => {
+                                             // RTT is calculated in ProbeEngine when response arrives - no timing corruption!
+                                             session.hops[hop_index].add_rtt_from_addr(response.source_addr, response.rtt);
+                                             debug!("UI: Hop {} RTT: {:?} from {} (precise: {}ns)", 
+                                                   hop_index + 1, response.rtt, response.source_addr, response.precise_rtt_ns);
+                                         }
+                                         IcmpResponseType::DestinationUnreachable => {
+                                             session.hops[hop_index].set_icmp_error();
+                                             if session.hops[hop_index].addr.is_none() {
+                                                 session.hops[hop_index].addr = Some(response.source_addr);
+                                             }
+                                             debug!("UI: Hop {} destination unreachable from {}", hop_index + 1, response.source_addr);
+                                         }
+                                         IcmpResponseType::Timeout => {
+                                             debug!("UI: Hop {} timeout", hop_index + 1);
+                                         }
+                                     }
+                                     
+                                                                            _probe_count += 1;
+                                     
+                                     // Always trigger update for every response - real-time feel
+                                     session.update_callback.is_some()
+                                 } else {
+                                     false
+                                 }
+                             };
+
+                             // Trigger UI update after processing each response (moved outside lock)
+                             if should_trigger_update {
+                                 let session = session_arc.lock().unwrap();
+                                 if let Some(ref callback) = session.update_callback {
+                                     callback();
+                                 }
+                             }
+
+                             // Yield to allow other tasks to run - cooperative multitasking
+                             tokio::task::yield_now().await;
                          }
-                         debug!("UI: Hop {} destination unreachable from {}", hop_index + 1, response.source_addr);
-                     }
-                     IcmpResponseType::Timeout => {
-                         debug!("UI: Hop {} timeout", hop_index + 1);
+                         None => {
+                             // Response channel closed
+                             break;
+                         }
                      }
                  }
-                 
-                 // Trigger UI update after processing each response
-                 if let Some(ref callback) = session.update_callback {
-                            callback();
-                        }
-                    }
-                }
+             }
+         }
          
-         info!("UI response processor finished");
+         info!("UI processor finished");
          Ok(())
-    }
+     }
 
     async fn run_simulated_trace_realtime(
         session_arc: std::sync::Arc<std::sync::Mutex<Self>>,
         args: Args,
     ) -> Result<()> {
-        info!("Running simulated traceroute (real-time)");
+        info!("Running simulated traceroute (real-time individual packet responses)");
 
         // Extract the numeric flag once to avoid borrow conflicts
         let numeric = args.numeric;
+        let max_hops = {
+            let session = session_arc.lock().unwrap();
+            session.hops.len()
+        };
 
         for round in 0..args.count.unwrap_or(1000) {
-            debug!("Simulation Round {}", round + 1);
+            debug!("Simulation Round {} (interval: {}ms)", round + 1, args.interval);
+            let round_start = tokio::time::Instant::now();
 
-            // Extract callback and hop updates in separate blocks to avoid borrow conflicts
-            let should_update_ui = {
-                    let mut session = session_arc.lock().unwrap();
-                for hop in &mut session.hops {
-                        hop.increment_sent();
-
-                    let base_latency = hop.hop as u64 * 10 + 20;
-                    let jitter = rand::random::<u64>() % 50;
-                    let packet_loss_chance = (hop.hop as f64 * 0.05).min(0.25);
-
-                        if rand::random::<f64>() > packet_loss_chance {
-                            let rtt = Duration::from_millis(base_latency + jitter);
-                        hop.add_rtt(rtt);
-
-                            if hop.addr.is_none() {
-                            match hop.hop {
-                                    1 => {
-                                        hop.addr = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
-                                        hop.hostname = if !numeric {
-                                            Some("gateway.local".to_string())
-                                        } else {
-                                            None
-                                        };
-                                    }
-                                    2..=3 => {
-                                    hop.addr = Some(IpAddr::V4(Ipv4Addr::new(10, 0, hop.hop, 1)));
-                                        hop.hostname = if !numeric {
-                                        Some(format!("core-{}.isp.net", hop.hop))
-                                        } else {
-                                            None
-                                        };
-                                    }
-                                    _ => {
-                                    let final_octet = if hop.hop >= 8 { 8 } else { hop.hop };
-                                    hop.addr = Some(IpAddr::V4(Ipv4Addr::new(8, 8, 8, final_octet)));
-                                        hop.hostname = if !numeric {
-                                            Some("dns.google".to_string())
-                                        } else {
-                                            None
-                                        };
-                                    }
-                                }
-                            }
-
-                        if hop.hop >= 8 {
-                            break;
-                            }
-                        } else {
-                            hop.add_timeout();
-                    }
+            // PHASE 1: Send all packets immediately (shows waiting state)
+            {
+                let mut session = session_arc.lock().unwrap();
+                for hop_index in 0..max_hops {
+                    session.hops[hop_index].increment_sent();
                 }
                 
-                // Return whether to update UI (true if callback exists)
-                session.update_callback.is_some()
-            };
-
-            // Trigger UI update in separate block to avoid borrow conflicts
-            if should_update_ui {
-                let session = session_arc.lock().unwrap();
+                // Trigger UI update to show all hops in waiting state
                 if let Some(ref callback) = session.update_callback {
                     callback();
                 }
             }
+            
+            // PHASE 2: Simulate responses arriving individually with realistic delays
+            for hop_index in 0..max_hops {
+                // Simulate network transit time for this hop
+                let base_transit_time = (hop_index + 1) as u64 * 15 + 10; // 25ms, 40ms, 55ms, etc.
+                let jitter = rand::random::<u64>() % 30; // 0-30ms jitter
+                let transit_time = Duration::from_millis(base_transit_time + jitter);
+                
+                // Wait for the simulated transit time
+                tokio::time::sleep(transit_time).await;
 
-            tokio::time::sleep(Duration::from_millis(args.interval)).await;
+                let should_update_ui = {
+                    let mut session = session_arc.lock().unwrap();
+                    let hop = &mut session.hops[hop_index];
+                    
+                    // Don't increment sent again - already done in phase 1
+
+                    let base_latency = (hop_index + 1) as u64 * 15 + 20; // Realistic latency progression
+                    let rtt_jitter = rand::random::<u64>() % 20;
+                    let packet_loss_chance = utils::math::clamp_f64(hop_index as f64 * 0.03, 0.0, 0.20);
+
+                    if rand::random::<f64>() > packet_loss_chance {
+                        let rtt = Duration::from_millis(base_latency + rtt_jitter);
+                        hop.add_rtt(rtt);
+
+                        if hop.addr.is_none() {
+                            match hop.hop {
+                                1 => {
+                                    hop.addr = Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
+                                    hop.hostname = if !numeric {
+                                        Some("gateway.local".to_string())
+                                    } else {
+                                        None
+                                    };
+                                }
+                                2..=3 => {
+                                    hop.addr = Some(IpAddr::V4(Ipv4Addr::new(10, 0, hop.hop, 1)));
+                                    hop.hostname = if !numeric {
+                                        Some(format!("core-{}.isp.net", hop.hop))
+                                    } else {
+                                        None
+                                    };
+                                }
+                                _ => {
+                                    let final_octet = if hop.hop >= 8 { 8 } else { hop.hop };
+                                    hop.addr = Some(IpAddr::V4(Ipv4Addr::new(8, 8, 8, final_octet)));
+                                    hop.hostname = if !numeric {
+                                        Some("dns.google".to_string())
+                                    } else {
+                                        None
+                                    };
+                                }
+                            }
+                        }
+                    } else {
+                        hop.add_timeout();
+                    }
+
+                    session.update_callback.is_some()
+                };
+
+                // Trigger UI update immediately when this packet response "arrives"
+                if should_update_ui {
+                    let session = session_arc.lock().unwrap();
+                    if let Some(ref callback) = session.update_callback {
+                        callback();
+                    }
+                }
+
+                // Stop at target (simulate reaching destination)
+                if hop_index + 1 >= 8 {
+                    break;
+                }
+            }
+
+            // Wait for the remainder of the interval before starting the next round
+            // This maintains the specified interval timing while showing individual responses
+            let elapsed = round_start.elapsed();
+            let interval_duration = Duration::from_millis(args.interval);
+            if elapsed < interval_duration {
+                let remaining = interval_duration - elapsed;
+                debug!("Round {} completed in {:?}, waiting {:?} more", round + 1, elapsed, remaining);
+                tokio::time::sleep(remaining).await;
+            }
         }
 
         Ok(())
@@ -770,6 +900,9 @@ mod tests {
             show_all: false,
             simulate: false,
             protocol: crate::args::ProbeProtocol::Icmp,
+            force_simulate: false,
+            timing: false,
+            quiet: false,
         };
 
         let session = MtrSession::new(args).await;
@@ -798,6 +931,9 @@ mod tests {
             show_all: false,
             simulate: false,
             protocol: crate::args::ProbeProtocol::Icmp,
+            force_simulate: false,
+            timing: false,
+            quiet: false,
         };
 
         let session = MtrSession::new(args).await;
@@ -825,6 +961,9 @@ mod tests {
             show_all: false,
             simulate: false,
             protocol: crate::args::ProbeProtocol::Icmp,
+            force_simulate: false,
+            timing: false,
+            quiet: false,
         };
 
         // We can't easily test MtrSession::new in sync context due to async resolver,

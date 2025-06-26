@@ -4,6 +4,7 @@ pub mod probe;
 pub mod report;
 pub mod session;
 pub mod ui;
+pub mod utils;
 
 // Re-export commonly used types
 pub use args::{Args, SparklineScale};

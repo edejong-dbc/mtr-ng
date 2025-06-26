@@ -124,6 +124,28 @@ mtr-ng google.com --report --fields hop,host,loss,avg > network_report.txt
 
 ## Advanced Features
 
+### Simulation Mode (No Sudo Required!)
+For development, testing, and demo purposes, MTR-NG includes a comprehensive simulation mode:
+```bash
+# Test without requiring administrator privileges
+mtr-ng google.com --simulate
+
+# Quick test in report mode
+mtr-ng google.com --simulate --count 3 --report
+
+# Test all protocols in simulation
+mtr-ng google.com --simulate -P icmp
+mtr-ng google.com --simulate -P udp  
+mtr-ng google.com --simulate -P tcp
+```
+
+**Perfect for:**
+- Development and debugging
+- CI/CD pipelines  
+- Testing on restricted systems
+- Educational demonstrations
+- Validating UI and statistics logic
+
 ### Sparkline Visualization
 MTR-NG provides beautiful Unicode sparklines showing RTT history:
 - `▁▂▃▄▅▆▇█` - Visual representation of network performance
@@ -164,6 +186,32 @@ MTR-NG is actively developed with focus on:
 - **Interactive UI**: Real-time monitoring with controls
 - **IPv6 Support**: Next-generation protocol support (planned)
 
+## Development & Testing
+
+### Easy Testing (No Sudo Required)
+MTR-NG provides comprehensive testing tools that work without administrator privileges:
+
+```bash
+# Quick start - test simulation mode
+cargo run -- --simulate --count 3 --report google.com
+
+# Run all unit tests
+cargo test
+
+# Use automated testing tools
+./scripts/test-dev.sh test-all     # Shell script
+just ci                           # Or with 'just' task runner
+```
+
+**Testing Documentation**: See [TESTING.md](TESTING.md) for comprehensive testing guide.
+
+### Development Tools
+The project includes several convenience tools:
+- `justfile` - Modern task runner with development commands
+- `scripts/test-dev.sh` - Shell script for common testing tasks  
+- Simulation mode - Test all functionality without network access
+- Comprehensive unit test suite covering all components
+
 ## Contributing
 
 Contributions welcome! Areas of interest:
@@ -171,6 +219,8 @@ Contributions welcome! Areas of interest:
 - IPv6 protocol support
 - Additional statistical metrics
 - Platform-specific optimizations
+
+**Getting Started**: All development can be done without sudo using simulation mode - see [TESTING.md](TESTING.md).
 
 ## License
 

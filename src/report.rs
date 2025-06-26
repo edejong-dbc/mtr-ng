@@ -1,4 +1,5 @@
 use crate::args::Column;
+use crate::utils;
 use crate::{MtrSession, Result};
 
 fn format_column_headers(columns: &[Column]) -> String {
@@ -43,49 +44,49 @@ fn format_row_data(
             Column::Sent => row.push_str(&format!(" {:4}", hop.sent)),
             Column::Last => {
                 if let Some(rtt) = hop.last_rtt {
-                    row.push_str(&format!(" {:6.1}", rtt.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:6.1}", utils::time::duration_to_ms_f64(rtt)));
                 } else {
                     row.push_str("   ???");
                 }
             }
             Column::Avg => {
                 if let Some(rtt) = hop.avg_rtt {
-                    row.push_str(&format!(" {:6.1}", rtt.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:6.1}", utils::time::duration_to_ms_f64(rtt)));
                 } else {
                     row.push_str("   ???");
                 }
             }
             Column::Ema => {
                 if let Some(rtt) = hop.ema_rtt {
-                    row.push_str(&format!(" {:5.1}", rtt.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:5.1}", utils::time::duration_to_ms_f64(rtt)));
                 } else {
                     row.push_str("   ???");
                 }
             }
             Column::Jitter => {
                 if let Some(jitter) = hop.last_jitter {
-                    row.push_str(&format!(" {:5.1}", jitter.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:5.1}", utils::time::duration_to_ms_f64(jitter)));
                 } else {
                     row.push_str("   ???");
                 }
             }
             Column::JitterAvg => {
                 if let Some(jitter) = hop.jitter_avg {
-                    row.push_str(&format!(" {:5.1}", jitter.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:5.1}", utils::time::duration_to_ms_f64(jitter)));
                 } else {
                     row.push_str("   ???");
                 }
             }
             Column::Best => {
                 if let Some(rtt) = hop.best_rtt {
-                    row.push_str(&format!(" {:5.1}", rtt.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:5.1}", utils::time::duration_to_ms_f64(rtt)));
                 } else {
                     row.push_str("   ???");
                 }
             }
             Column::Worst => {
                 if let Some(rtt) = hop.worst_rtt {
-                    row.push_str(&format!(" {:5.1}", rtt.as_secs_f64() * 1000.0));
+                    row.push_str(&format!(" {:5.1}", utils::time::duration_to_ms_f64(rtt)));
                 } else {
                     row.push_str("   ???");
                 }
@@ -136,29 +137,19 @@ pub async fn run_report(mut session: MtrSession) -> Result<()> {
         }
 
         let hostname = if session.args.numeric {
-            hop.addr
-                .map(|a| a.to_string())
-                .unwrap_or_else(|| "???".to_string())
+            utils::network::format_optional_ip(hop.addr)
         } else {
-            hop.hostname.clone().unwrap_or_else(|| {
-                hop.addr
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|| "???".to_string())
-            })
+            utils::network::format_hostname_with_fallback(hop.hostname.clone(), hop.addr)
         };
 
         let stddev = if hop.received > 1 && hop.rtts.len() > 1 {
-            let mean = hop.avg_rtt.unwrap().as_secs_f64() * 1000.0;
-            let variance = hop
+            let mean = utils::time::duration_to_ms_f64(hop.avg_rtt.unwrap());
+            let rtt_values_ms: Vec<f64> = hop
                 .rtts
                 .iter()
-                .map(|rtt| {
-                    let diff = rtt.as_secs_f64() * 1000.0 - mean;
-                    diff * diff
-                })
-                .sum::<f64>()
-                / (hop.rtts.len() - 1) as f64;
-            variance.sqrt()
+                .map(|rtt| utils::time::duration_to_ms_f64(*rtt))
+                .collect();
+            utils::math::calculate_stddev(&rtt_values_ms, mean)
         } else {
             0.0
         };

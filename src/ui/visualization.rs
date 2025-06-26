@@ -3,6 +3,7 @@
 //! This module provides sparkline generation, color management, and RTT calculation
 //! utilities for the terminal user interface.
 
+use crate::utils;
 use crate::{HopStats, SparklineScale};
 use ratatui::{
     style::Style,
@@ -34,12 +35,13 @@ pub enum VisualizationMode {
 /// Color scheme functions for RTT visualization
 pub mod colors {
     use super::ColorSupport;
+    use crate::utils;
     use ratatui::style::Color;
 
     pub fn get_rtt_color(ratio: f64, color_support: ColorSupport) -> (char, Color) {
-        let level = (ratio.clamp(0.0, 1.0) * 8.0).round() as usize;
+        let level = (utils::math::clamp_ratio(ratio) * 8.0).round() as usize;
         let chars = ['▁', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-        let char = chars[level.min(chars.len() - 1)];
+        let char = chars[utils::math::safe_array_index(level as f64, chars.len())];
 
         let color = match color_support {
             ColorSupport::None => Color::White,
@@ -55,11 +57,11 @@ pub mod colors {
                     Color::Red,
                     Color::Red,
                 ];
-                colors[level.min(colors.len() - 1)]
+                colors[utils::math::safe_array_index(level as f64, colors.len())]
             }
             ColorSupport::Extended => {
                 let colors = [17, 21, 39, 75, 111, 179, 215, 208, 130];
-                let index = level.min(colors.len() - 1);
+                let index = utils::math::safe_array_index(level as f64, colors.len());
                 Color::Indexed(colors[index])
             }
             ColorSupport::TrueColor => {
@@ -74,7 +76,7 @@ pub mod colors {
                     (220, 120, 0),
                     (150, 80, 0),
                 ];
-                let (r, g, b) = colors[level.min(colors.len() - 1)];
+                let (r, g, b) = colors[utils::math::safe_array_index(level as f64, colors.len())];
                 Color::Rgb(r, g, b)
             }
         };
@@ -83,7 +85,7 @@ pub mod colors {
     }
 
     pub fn get_smooth_gradient_color(ratio: f64, color_support: ColorSupport) -> Color {
-        let ratio = ratio.clamp(0.0, 1.0);
+        let ratio = utils::math::clamp_ratio(ratio);
 
         match color_support {
             ColorSupport::None => Color::White,
@@ -96,12 +98,12 @@ pub mod colors {
                     Color::Red,
                 ];
                 let index = (ratio * (colors.len() - 1) as f64).round() as usize;
-                colors[index.min(colors.len() - 1)]
+                colors[utils::math::safe_array_index(index as f64, colors.len())]
             }
             ColorSupport::Extended => {
                 let steps = [17, 21, 33, 39, 75, 111, 179, 215];
                 let index = (ratio * (steps.len() - 1) as f64).round() as usize;
-                Color::Indexed(steps[index.min(steps.len() - 1)])
+                Color::Indexed(steps[utils::math::safe_array_index(index as f64, steps.len())])
             }
             ColorSupport::TrueColor => {
                 let (r, g, b) = if ratio < 0.5 {
@@ -139,7 +141,7 @@ pub mod colors {
         end: (f64, f64, f64),
         ratio: f64,
     ) -> (f64, f64, f64) {
-        let ratio = ratio.clamp(0.0, 1.0);
+        let ratio = utils::math::clamp_ratio(ratio);
         (
             start.0 + (end.0 - start.0) * ratio,
             start.1 + (end.1 - start.1) * ratio,
@@ -164,12 +166,9 @@ pub fn calculate_rtt_ratio(
     }
 
     match scale {
-        SparklineScale::Linear => (rtt_ms as f64 / global_max as f64).clamp(0.0, 1.0),
+        SparklineScale::Linear => utils::math::calculate_ratio(rtt_ms as f64, global_max as f64),
         SparklineScale::Logarithmic => {
-            let log_rtt = ((rtt_ms + 1) as f64).log10();
-            let log_min = ((global_min + 1) as f64).log10();
-            let log_max = ((global_max + 1) as f64).log10();
-            ((log_rtt - log_min) / (log_max - log_min)).clamp(0.0, 1.0)
+            utils::math::calculate_log_ratio(rtt_ms as f64, global_min as f64, global_max as f64)
         }
     }
 }
@@ -206,9 +205,12 @@ pub fn create_sparkline_spans(
         .iter()
         .map(|outcome| match outcome {
             crate::hop_stats::PacketOutcome::Received(rtt) => {
-                let rtt_ms = (rtt.as_secs_f64() * 1000.0) as u64;
+                let rtt_ms = utils::time::duration_to_ms_u64(*rtt);
                 let ratio = calculate_rtt_ratio(rtt_ms, global_min_rtt, global_max_rtt, scale);
-                let (char, color) = colors::get_rtt_color(ratio, color_support);
+                // Get the character based on ratio (keep variable height)
+                let char = utils::visualization::get_sparkline_char(ratio);
+                // Use smooth gradient color like heatmap
+                let color = colors::get_smooth_gradient_color(ratio, color_support);
                 Span::styled(char.to_string(), Style::default().fg(color))
             }
             crate::hop_stats::PacketOutcome::Lost => {
@@ -258,7 +260,7 @@ pub fn create_heatmap_spans(
         .map(|outcome| {
             match outcome {
                 crate::hop_stats::PacketOutcome::Received(rtt) => {
-                    let rtt_ms = (rtt.as_secs_f64() * 1000.0) as u64;
+                    let rtt_ms = utils::time::duration_to_ms_u64(*rtt);
                     let ratio = calculate_rtt_ratio(rtt_ms, global_min_rtt, global_max_rtt, scale);
                     // Use full-height block with color based on RTT ratio
                     let color = colors::get_smooth_gradient_color(ratio, color_support);

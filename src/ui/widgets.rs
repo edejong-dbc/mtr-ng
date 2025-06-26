@@ -6,6 +6,7 @@
 
 use crate::args::Column;
 use crate::ui::visualization::{ColorSupport, VisualizationMode};
+use crate::utils;
 use crate::{HopStats, MtrSession, SparklineScale};
 use ratatui::{
     layout::{Alignment, Constraint},
@@ -106,34 +107,24 @@ pub fn create_table_cells(
                     }
                 }
                 Column::Sent => hop.sent.to_string(),
-                Column::Last => hop
-                    .last_rtt
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
-                Column::Avg => hop
-                    .avg_rtt
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
-                Column::Ema => hop
-                    .ema_rtt
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
-                Column::Jitter => hop
-                    .last_jitter
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
-                Column::JitterAvg => hop
-                    .jitter_avg
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
-                Column::Best => hop
-                    .best_rtt
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
-                Column::Worst => hop
-                    .worst_rtt
-                    .map(|d| format!("{:.1}", d.as_secs_f64() * 1000.0))
-                    .unwrap_or_else(|| "???".to_string()),
+                Column::Last => {
+                    if let Some(rtt) = hop.last_rtt {
+                        // Use microsecond precision for very fast connections (< 1ms)
+                        if utils::time::duration_to_us_f64(rtt) < 1000.0 {
+                            utils::time::format_duration_us(rtt)
+                        } else {
+                            utils::time::format_duration_ms(rtt)
+                        }
+                    } else {
+                        "???".to_string()
+                    }
+                },
+                Column::Avg => utils::time::format_optional_duration_ms(hop.avg_rtt),
+                Column::Ema => utils::time::format_optional_duration_ms(hop.ema_rtt),
+                Column::Jitter => utils::time::format_optional_duration_ms(hop.last_jitter),
+                Column::JitterAvg => utils::time::format_optional_duration_ms(hop.jitter_avg),
+                Column::Best => utils::time::format_optional_duration_ms(hop.best_rtt),
+                Column::Worst => utils::time::format_optional_duration_ms(hop.worst_rtt),
                 Column::Graph => {
                     return Cell::from(Line::from(sparkline_spans.to_vec()));
                 }
@@ -415,7 +406,7 @@ pub fn create_scale_widget(
         return Paragraph::new("No RTT data available");
     }
 
-    let scale_width = width.saturating_sub(4).max(20).min(60); // Minimum 20, maximum 60 chars
+            let scale_width = utils::layout::constrain_width(width as u16, 20, 60) as usize;
 
     // Create gradient visualization using the same color logic as sparklines
     let gradient_spans: Vec<Span> = (0..scale_width)
@@ -568,7 +559,7 @@ pub fn calculate_graph_width(table_area: &ratatui::layout::Rect, columns: &[Colu
         let graph_width = (remaining_width * 65) / 100;
 
         // Ensure minimum usable width but no upper cap
-        graph_width.max(20)
+        utils::math::max_with_minimum(graph_width, 20)
     } else {
         20
     }

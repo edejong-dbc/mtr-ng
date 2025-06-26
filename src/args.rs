@@ -169,6 +169,18 @@ pub struct Args {
     /// Probe protocol to use for measurements  
     #[arg(short = 'P', long, value_enum, default_value = "icmp")]
     pub protocol: ProbeProtocol,
+
+    /// Force simulation mode even when run as root (useful for testing)
+    #[arg(long, help = "Force simulation mode even with root privileges")]
+    pub force_simulate: bool,
+
+    /// Output timing information for performance analysis
+    #[arg(long, help = "Include timing statistics in output")]
+    pub timing: bool,
+
+    /// Quiet mode - reduce output verbosity
+    #[arg(short, long, help = "Quiet mode - minimal output")]
+    pub quiet: bool,
 }
 
 impl Args {
@@ -202,6 +214,10 @@ mod tests {
         assert!(args.fields.is_none());
         assert!(!args.show_all);
         assert!(!args.simulate);
+        assert_eq!(args.protocol, ProbeProtocol::Icmp);
+        assert!(!args.force_simulate);
+        assert!(!args.timing);
+        assert!(!args.quiet);
     }
 
     #[test]

@@ -11,9 +11,10 @@ use crate::ui::visualization::{
     create_heatmap_spans, create_sparkline_spans, VisualizationMode,
 };
 use crate::ui::widgets;
+use crate::utils;
 use crate::{MtrSession, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -28,7 +29,7 @@ use ratatui::{
 use std::{
     io,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -108,7 +109,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
         .iter()
         .filter(|hop| hop.sent > 0)
         .flat_map(|hop| hop.rtts.iter())
-        .map(|d| (d.as_secs_f64() * 1000.0) as u64)
+        .map(|d| utils::time::duration_to_ms_u64(*d))
         .collect();
 
     let global_max_rtt = rtt_values.iter().max().copied().unwrap_or(1);
@@ -206,7 +207,7 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                     format!("  ↳ {} ({:.0}%)", alt_path.addr, percentage)
                 };
 
-                let alt_rtt = alt_path.last_rtt.unwrap_or_default().as_secs_f64() * 1000.0;
+                let _alt_rtt = utils::time::duration_to_ms_f64(alt_path.last_rtt.unwrap_or_default());
 
                 // Create cells for each column, focusing on key info
                 let mut alt_cells = Vec::new();
@@ -216,7 +217,18 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
                         Column::Host => alt_cells.push(Cell::from(alt_hostname.clone())),
                         Column::Loss => alt_cells.push(Cell::from("")), // Empty - percentage is now in hostname
                         Column::Sent => alt_cells.push(Cell::from("")),
-                        Column::Last => alt_cells.push(Cell::from(format!("{:.1}", alt_rtt))),
+                        Column::Last => {
+                            if let Some(rtt) = alt_path.last_rtt {
+                                let formatted = if utils::time::duration_to_us_f64(rtt) < 1000.0 {
+                                    utils::time::format_duration_us(rtt)
+                                } else {
+                                    format!("{:.1}", utils::time::duration_to_ms_f64(rtt))
+                                };
+                                alt_cells.push(Cell::from(formatted));
+                            } else {
+                                alt_cells.push(Cell::from("???"));
+                            }
+                        },
                         Column::Avg => alt_cells.push(Cell::from("")),
                         Column::Ema => alt_cells.push(Cell::from("")),
                         Column::Best => alt_cells.push(Cell::from("")),
@@ -252,10 +264,12 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     if ui_state.show_help {
         let area = f.area();
         // Center the help overlay
-        let help_width = 50.min(area.width.saturating_sub(4));
-        let help_height = 12.min(area.height.saturating_sub(4));
-        let help_x = (area.width.saturating_sub(help_width)) / 2;
-        let help_y = (area.height.saturating_sub(help_height)) / 2;
+        let (help_width, help_height) = utils::layout::calculate_popup_dimensions(
+            area.width, area.height, 50, 12
+        );
+        let (help_x, help_y) = utils::layout::center_popup(
+            area.width, area.height, help_width, help_height
+        );
 
         let help_area = Rect {
             x: help_x,
@@ -273,11 +287,13 @@ pub fn render_ui(f: &mut Frame, session: &MtrSession, ui_state: &UiState) {
     if ui_state.show_column_selector {
         let area = f.area();
         // Center the column selector popup - make it larger than help
-        let popup_width = 60.min(area.width.saturating_sub(4));
-        let popup_height = (ui_state.column_selector_state.available_columns.len() + 8)
-            .min(area.height.saturating_sub(4) as usize) as u16;
-        let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-        let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+        let preferred_height = (ui_state.column_selector_state.available_columns.len() + 8) as u16;
+        let (popup_width, popup_height) = utils::layout::calculate_popup_dimensions(
+            area.width, area.height, 60, preferred_height
+        );
+        let (popup_x, popup_y) = utils::layout::center_popup(
+            area.width, area.height, popup_width, popup_height
+        );
 
         let popup_area = Rect {
             x: popup_x,
@@ -337,46 +353,81 @@ pub async fn run_interactive(session: MtrSession) -> Result<()> {
         })
     };
 
-    let mut last_tick = Instant::now();
-    let tick_rate = Duration::from_millis(100);
+    // Create a channel for keyboard input events
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel::<crossterm::event::Event>();
+    
+    // Spawn a task to handle keyboard input asynchronously
+    let input_handle = tokio::spawn(async move {
+        loop {
+            if let Ok(true) = crossterm::event::poll(Duration::from_millis(16)) {
+                if let Ok(event) = crossterm::event::read() {
+                    if input_tx.send(event).is_err() {
+                        break; // Channel closed
+                    }
+                } else {
+                    // Error reading input
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            } else {
+                // No input available, yield briefly
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+    });
 
     loop {
-        let should_update = update_rx.try_recv().is_ok() || last_tick.elapsed() >= tick_rate;
-
-        if should_update {
-            // Lock session only during rendering to get live updates
-            terminal.draw(|f| {
-                let session_guard = session_clone.lock().unwrap();
-                render_ui(f, &session_guard, &ui_state)
-            })?;
-            last_tick = Instant::now();
-        }
-
-        let timeout = Duration::from_millis(10);
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                // Handle column selector popup inputs first
-                if ui_state.show_column_selector {
-                    event_handler.handle_column_selector_input(
-                        key.code,
-                        key.modifiers,
-                        &mut ui_state,
-                    );
-                } else {
-                    // Handle normal keyboard shortcuts
-                    let should_continue = event_handler.handle_normal_input(
-                        key.code,
-                        &mut ui_state,
-                        &session_clone,
-                    );
-                    if !should_continue {
-                        break;
+        // Pure event-driven: wait for data updates or keyboard input
+        tokio::select! {
+            // Wait for update notification from session (blocks until data arrives)
+            update_result = update_rx.recv() => {
+                if update_result.is_none() {
+                    // Channel closed, session ended
+                    break;
+                }
+                
+                // Update UI immediately when new data arrives
+                terminal.draw(|f| {
+                    let session_guard = session_clone.lock().unwrap();
+                    render_ui(f, &session_guard, &ui_state)
+                })?;
+            }
+            
+            // Handle keyboard input events immediately
+            input_event = input_rx.recv() => {
+                if let Some(Event::Key(key)) = input_event {
+                    // Handle column selector popup inputs first
+                    if ui_state.show_column_selector {
+                        event_handler.handle_column_selector_input(
+                            key.code,
+                            key.modifiers,
+                            &mut ui_state,
+                        );
+                    } else {
+                        // Handle normal keyboard shortcuts
+                        let should_continue = event_handler.handle_normal_input(
+                            key.code,
+                            &mut ui_state,
+                            &session_clone,
+                        );
+                        if !should_continue {
+                            break;
+                        }
                     }
+                    
+                    // ALWAYS redraw UI immediately after keyboard input
+                    terminal.draw(|f| {
+                        let session_guard = session_clone.lock().unwrap();
+                        render_ui(f, &session_guard, &ui_state)
+                    })?;
+                } else if input_event.is_none() {
+                    // Input channel closed
+                    break;
                 }
             }
         }
     }
 
+    input_handle.abort();
     trace_handle.abort();
     disable_raw_mode()?;
     execute!(
