@@ -59,7 +59,7 @@ tokio = { version = "1.45", features = ["full"] }
 tokio-util = "0.7"
 
 # Network operations
-socket2 = "0.5"
+socket2 = {  version = "0.5", features = ["all"] }
 pnet = "0.34"
 
 # Terminal UI and graphics
