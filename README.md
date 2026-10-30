@@ -1,5 +1,7 @@
 # MTR-NG - Modern My Traceroute in Rust
 
+> **mtr-ng has moved to [github.com/gedejong/mtr-ng](https://github.com/gedejong/mtr-ng)**, my personal account, where 0.4.0 and later are released. This repository stays at 0.3.0. Both accounts are mine, and as the owner of the `mtr-ng` crate on crates.io through this account, I approve adding `gedejong` as an owner of the crate. *Edwin de Jong*
+
 A modern, feature-rich implementation of My Traceroute (MTR) built in Rust, offering real-time network path visualization with enhanced sparklines, jitter analysis, and advanced column customization.
 
 ## Features
